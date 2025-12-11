@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:15-alpine
@@ -35,7 +33,7 @@ services:
       - minio_data:/minio/data
     # networks:
     #   - nhakhoa-network
-    # command: minio server /minio/data --console-address ":9001"
+    command: server /minio/data --console-address ":9001"
     # healthcheck:
     #   test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
     #   interval: 30s
