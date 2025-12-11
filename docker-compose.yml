@@ -40,39 +40,6 @@ services:
     #   timeout: 20s
     #   retries: 3
 
-  # backend:
-  #   build:
-  #     context: ./backend
-  #     dockerfile: Dockerfile
-  #   container_name: nhakhoa-backend
-  #   environment:
-  #     NODE_ENV: ${NODE_ENV:-development}
-  #     DB_HOST: postgres
-  #     DB_PORT: 5432
-  #     DB_USER: ${DB_USER:-postgres}
-  #     DB_PASSWORD: ${DB_PASSWORD:-postgres123}
-  #     DB_NAME: ${DB_NAME:-nhakhoa_db}
-  #     MINIO_HOST: minio
-  #     MINIO_PORT: 9000
-  #     MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
-  #     MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin123}
-  #     MINIO_BUCKET: ${MINIO_BUCKET:-nhakhoa}
-  #     MINIO_USE_SSL: ${MINIO_USE_SSL:-false}
-  #   ports:
-  #     - "3000:3000"
-  #   depends_on:
-  #     postgres:
-  #       condition: service_healthy
-  #     minio:
-  #       condition: service_healthy
-  #   volumes:
-  #     # Mount code để dev hotreload
-  #     - ./backend/src:/app/src
-  #     - ./backend/node_modules:/app/node_modules
-  #   networks:
-  #     - nhakhoa-network
-  #   command: npm run dev
-
 volumes:
   postgres_data:
     driver: local
