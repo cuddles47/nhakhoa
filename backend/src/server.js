@@ -1,9 +1,10 @@
+require('dotenv').config();
 const express = require('express');
 const app = require('./app');
 const db = require('./config/database');
 
-const PORT = process.env.PORT;
-const NODE_ENV = process.env.NODE_ENV;
+const PORT = process.env.PORT || 3000;
+const NODE_ENV = process.env.NODE_ENV || 'development';
 
 app.listen(PORT, async () => {
     console.log('==============================');
@@ -12,7 +13,7 @@ app.listen(PORT, async () => {
     console.log('==============================');
 
     const dbConfig = db.pool.options || db.pool;
-    console.log('Database config:');
+    console.log('🔗 Database config:');
     console.log(`   Host: ${dbConfig.host}`);
     console.log(`   Port: ${dbConfig.port}`);
     console.log(`   User: ${dbConfig.user}`);
@@ -20,9 +21,9 @@ app.listen(PORT, async () => {
 
     try {
         await db.pool.query('SELECT 1');
-        console.log('Database connection: SUCCESS');
+        console.log('✅ Database connection: SUCCESS');
     } catch (err) {
-        console.error('Database connection: FAILED');
+        console.error('❌ Database connection: FAILED');
         console.error(err.message);
     }
     // Thông tin kết nối MinIO và tạo bucket 'nhakhoa'

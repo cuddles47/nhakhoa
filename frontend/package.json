@@ -1,0 +1,20 @@
+{
+  "name": "nhakhoa-frontend",
+  "version": "1.0.0",
+  "description": "Frontend for NhaKhoa Management System",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.20.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.2.0",
+    "vite": "^6.4.1"
+  }
+}
