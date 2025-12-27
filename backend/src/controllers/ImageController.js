@@ -16,7 +16,23 @@ class ImageController {
         try {
             const { visitId } = req.params;
             const images = await Image.findByVisitId(visitId);
-            res.json({ success: true, data: images });
+            
+            // Generate presigned URLs for all images
+            const storageService = require('../services/storage');
+            const imagesWithUrls = await Promise.all(
+                images.map(async (image) => {
+                    // Extract object name from url_minio (remove bucket prefix)
+                    const objectName = image.url_minio.replace(/^\/[^/]+\//, '');
+                    const presignedResult = await storageService.getPresignedUrl(objectName, 3600); // 1 hour expiry
+                    
+                    return {
+                        ...image,
+                        url_minio: presignedResult.success ? presignedResult.url : image.url_minio
+                    };
+                })
+            );
+            
+            res.json({ success: true, data: imagesWithUrls });
         } catch (error) {
             console.error('Error fetching images:', error);
             res.status(500).json({ success: false, error: error.message });
@@ -44,12 +60,13 @@ class ImageController {
 
     async createImage(req, res) {
         try {
-            const { visit_id, url_minio, image_category, image_type, image_index, notes } = req.body;
+            const { visit_id, image_category, image_type, image_index, notes } = req.body;
+            let url_minio = req.body.url_minio;
             
-            if (!visit_id || !url_minio || !image_category) {
+            if (!visit_id || !image_category) {
                 return res.status(400).json({ 
                     success: false, 
-                    error: 'Visit ID, URL, and category are required' 
+                    error: 'Visit ID and category are required' 
                 });
             }
             
@@ -57,6 +74,40 @@ class ImageController {
                 return res.status(400).json({ 
                     success: false, 
                     error: 'Invalid category. Must be "raw" or "stained"' 
+                });
+            }
+            
+            // If file is uploaded, upload to MinIO first
+            if (req.file) {
+                const storageService = require('../services/storage');
+                const timestamp = Date.now();
+                const ext = req.file.mimetype.split('/')[1] || 'jpg';
+                const objectName = `visits/${visit_id}/${image_category}_${image_type}_${timestamp}.${ext}`;
+                
+                const uploadResult = await storageService.uploadFile(
+                    objectName,
+                    req.file.buffer,
+                    {
+                        'Content-Type': req.file.mimetype,
+                        'Content-Length': req.file.size
+                    }
+                );
+                
+                if (!uploadResult.success) {
+                    return res.status(500).json({
+                        success: false,
+                        error: 'Failed to upload to MinIO: ' + uploadResult.error
+                    });
+                }
+                
+                url_minio = uploadResult.url;
+            }
+            
+            // url_minio is now required (either from body or from file upload)
+            if (!url_minio) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Either url_minio or image file is required'
                 });
             }
             

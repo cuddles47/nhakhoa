@@ -64,6 +64,19 @@ const getFileUrl = (objectName) => {
 const getPresignedUrl = async (objectName, expirySeconds = 3600) => {
   try {
     const url = await minioClient.presignedGetObject(BUCKET_NAME, objectName, expirySeconds);
+    
+    // Ensure the URL includes the full host (not just a relative path)
+    // MinIO client sometimes returns relative URLs
+    const protocol = process.env.MINIO_USE_SSL === 'true' ? 'https' : 'http';
+    const host = process.env.MINIO_HOST || 'localhost';
+    const port = process.env.MINIO_PORT || '9000';
+    
+    // If URL doesn't start with http, prepend the full MinIO URL
+    if (!url.startsWith('http')) {
+      const fullUrl = `${protocol}://${host}:${port}${url}`;
+      return { success: true, url: fullUrl };
+    }
+    
     return { success: true, url };
   } catch (error) {
     console.error('Error getting presigned URL:', error);

@@ -368,16 +368,9 @@ setPatientMappings({})
           </div>
         </div>
 
-        {/* Action Buttons */}
+        {/* Action Buttons - Clear only, Upload moved to bottom */}
         {files.length > 0 && (
           <div className="button-group" style={{ marginTop: '20px' }}>
-            <button
-              className="button"
-              onClick={handleUpload}
-              disabled={uploading || parsedData.length === 0}
-            >
-              {uploading ? 'Đang upload...' : `Upload ${parsedData.length} nhóm ảnh`}
-            </button>
             <button
               className="button-secondary button"
               onClick={handleClear}
@@ -596,10 +589,107 @@ setPatientMappings({})
             })}
           </div>
           
-          {/* Upload Summary */}
-          <div style={{ marginTop: '20px', padding: '15px', background: '#f9fbfc', borderRadius: '8px' }}>
-            <div style={{ fontSize: '14px', color: '#666' }}>
-              <strong>Tổng kết:</strong> {Object.keys(patientMappings).length}/{parsedData.length} nhóm đã gán bệnh nhân
+          {/* Confirmation Summary */}
+          <div style={{ marginTop: '20px', padding: '20px', background: '#f8f9fa', borderRadius: '12px', border: '2px solid #e0e0e0' }}>
+            <h3 style={{ marginBottom: '15px', color: '#1F2937', fontSize: '16px' }}>📋 Xác Nhận Trước Khi Upload</h3>
+            
+            <div style={{ marginBottom: '20px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '15px' }}>
+                <div style={{ padding: '12px', background: 'white', borderRadius: '8px', border: '1px solid #e0e0e0' }}>
+                  <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#1E88E5' }}>
+                    {parsedData.length}
+                  </div>
+                  <div style={{ fontSize: '13px', color: '#666' }}>Nhóm ảnh (lần khám)</div>
+                </div>
+                <div style={{ padding: '12px', background: 'white', borderRadius: '8px', border: '1px solid #e0e0e0' }}>
+                  <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#1E88E5' }}>
+                    {parsedData.reduce((sum, group) => sum + group.images.length, 0)}
+                  </div>
+                  <div style={{ fontSize: '13px', color: '#666' }}>Tổng số ảnh</div>
+                </div>
+                <div style={{ padding: '12px', background: 'white', borderRadius: '8px', border: '1px solid #e0e0e0' }}>
+                  <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#4CAF50' }}>
+                    {Object.values(patientMappings).filter(m => m.type === 'new').length}
+                  </div>
+                  <div style={{ fontSize: '13px', color: '#666' }}>Bệnh nhân mới</div>
+                </div>
+                <div style={{ padding: '12px', background: 'white', borderRadius: '8px', border: '1px solid #e0e0e0' }}>
+                  <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#FFA726' }}>
+                    {Object.values(patientMappings).filter(m => m.type === 'existing').length}
+                  </div>
+                  <div style={{ fontSize: '13px', color: '#666' }}>Bệnh nhân có sẵn</div>
+                </div>
+              </div>
+
+              {/* Status Message */}
+              {Object.keys(patientMappings).length < parsedData.length ? (
+                <div style={{ 
+                  padding: '12px 16px', 
+                  background: '#FFF3E0', 
+                  border: '1px solid #FFA726',
+                  borderRadius: '8px',
+                  color: '#E65100',
+                  fontSize: '14px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px'
+                }}>
+                  <span style={{ fontSize: '20px' }}>⚠️</span>
+                  <div>
+                    <strong>Chưa hoàn tất:</strong> {parsedData.length - Object.keys(patientMappings).length} nhóm chưa gán bệnh nhân.
+                    <br />
+                    <span style={{ fontSize: '13px' }}>Vui lòng gán bệnh nhân cho tất cả các nhóm trước khi upload.</span>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ 
+                  padding: '12px 16px', 
+                  background: '#E8F5E9', 
+                  border: '1px solid #4CAF50',
+                  borderRadius: '8px',
+                  color: '#2E7D32',
+                  fontSize: '14px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px'
+                }}>
+                  <span style={{ fontSize: '20px' }}>✅</span>
+                  <div>
+                    <strong>Sẵn sàng upload!</strong> Tất cả {parsedData.length} nhóm đã được gán bệnh nhân.
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Action Buttons */}
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <button
+                className="button"
+                onClick={handleUpload}
+                disabled={uploading || Object.keys(patientMappings).length < parsedData.length}
+                style={{ 
+                  flex: 1, 
+                  padding: '14px', 
+                  fontSize: '15px',
+                  fontWeight: '600',
+                  opacity: (uploading || Object.keys(patientMappings).length < parsedData.length) ? 0.5 : 1,
+                  cursor: (uploading || Object.keys(patientMappings).length < parsedData.length) ? 'not-allowed' : 'pointer'
+                }}
+              >
+                {uploading ? '⏳ Đang xử lý...' : `🚀 Xác nhận và Upload ${parsedData.length} nhóm`}
+              </button>
+              <button
+                className="button-secondary button"
+                onClick={handleClear}
+                disabled={uploading}
+                style={{ 
+                  padding: '14px 24px', 
+                  fontSize: '15px',
+                  fontWeight: '600'
+                }}
+              >
+                ❌ Hủy
+              </button>
             </div>
           </div>
         </div>

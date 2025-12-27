@@ -1,21 +1,28 @@
 import { useState, useEffect } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { getPatients, searchPatients, deletePatient } from '../api'
 import PatientForm from './PatientForm'
 import { FiPlus, FiSearch, FiEye, FiTrash2, FiChevronLeft, FiChevronRight, FiChevronsLeft, FiChevronsRight, FiX } from 'react-icons/fi'
 
-function PatientList({ onSelectPatient }) {
+function PatientList() {
+  const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+  
   const [patients, setPatients] = useState([])
-  const [searchQuery, setSearchQuery] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [page, setPage] = useState(1)
-  const [limit, setLimit] = useState(10)
+  
+  // Get params from URL or use defaults
+  const page = parseInt(searchParams.get('page')) || 1
+  const limit = parseInt(searchParams.get('limit')) || 10
+  const searchQuery = searchParams.get('search') || ''
+  
   const [totalPages, setTotalPages] = useState(0)
   const [total, setTotal] = useState(0)
 
   useEffect(() => {
     loadPatients()
-  }, [page, limit])
+  }, [searchParams])
 
   const loadPatients = async () => {
     try {
@@ -42,19 +49,17 @@ function PatientList({ onSelectPatient }) {
 
   const handleSearch = (e) => {
     const query = e.target.value
-    setSearchQuery(query)
-    setPage(1) // Reset to page 1
-  }
-
-  // Debounced search - separate from page/limit effect
-  useEffect(() => {
-    if (searchQuery === '') return // Don't trigger on empty initial state
+    const newParams = new URLSearchParams(searchParams)
     
-    const timer = setTimeout(() => {
-      loadPatients()
-    }, 300)
-    return () => clearTimeout(timer)
-  }, [searchQuery])
+    if (query) {
+      newParams.set('search', query)
+    } else {
+      newParams.delete('search')
+    }
+    newParams.set('page', '1') // Reset to page 1
+    
+    setSearchParams(newParams)
+  }
 
   const handleDelete = async (id) => {
     if (!window.confirm('Bạn có chắc muốn xóa bệnh nhân này?')) return
@@ -68,20 +73,19 @@ function PatientList({ onSelectPatient }) {
   }
 
   const handlePageChange = (newPage) => {
-    setPage(newPage)
+    const newParams = new URLSearchParams(searchParams)
+    newParams.set('page', newPage.toString())
+    setSearchParams(newParams)
   }
 
   const handleLimitChange = (e) => {
-    setLimit(Number(e.target.value))
-    setPage(1)
+    const newParams = new URLSearchParams(searchParams)
+    newParams.set('limit', e.target.value)
+    newParams.set('page', '1') // Reset to page 1
+    setSearchParams(newParams)
   }
 
-  const [showCreateModal, setShowCreateModal] = useState(false)
 
-  const handleCreateSuccess = () => {
-    setShowCreateModal(false)
-    loadPatients()
-  }
 
   if (loading) return <div className="loading">Đang tải...</div>
   if (error) return <div className="error">{error}</div>
@@ -100,7 +104,7 @@ function PatientList({ onSelectPatient }) {
         
         <button 
           className="button"
-          onClick={() => setShowCreateModal(true)}
+          onClick={() => navigate('/patients/new')}
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -114,14 +118,21 @@ function PatientList({ onSelectPatient }) {
 
       {/* Search bar */}
       <div style={{ marginBottom: '20px', position: 'relative', maxWidth: '500px' }}>
-        <FiSearch size={18} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-sub)' }} />
+        <FiSearch size={18} style={{ 
+          position: 'absolute', 
+          left: '14px', 
+          top: '50%', 
+          transform: 'translateY(-50%)', 
+          color: 'var(--text-sub)',
+          pointerEvents: 'none'
+        }} />
         <input
           type="text"
           className="search-box"
           placeholder="Tìm kiếm theo tên hoặc số điện thoại..."
           value={searchQuery}
           onChange={handleSearch}
-          style={{ width: '100%', paddingLeft: '40px' }}
+          style={{ width: '100%', paddingLeft: '42px' }}
         />
       </div>
 
@@ -147,7 +158,7 @@ function PatientList({ onSelectPatient }) {
               <td className="action-buttons">
                 <button 
                   className="icon-button"
-                  onClick={() => onSelectPatient(patient)}
+                  onClick={() => navigate(`/patients/${patient.id}/visits`)}
                   title="Xem lần khám"
                   style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
                 >
@@ -269,58 +280,6 @@ function PatientList({ onSelectPatient }) {
         </div>
       )}
 
-      {/* Create Patient Modal */}
-      {showCreateModal && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: 'rgba(0, 0, 0, 0.5)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 1000
-        }}>
-          <div style={{
-            backgroundColor: 'white',
-            borderRadius: '8px',
-            padding: '30px',
-            maxWidth: '600px',
-            width: '90%',
-            maxHeight: '90vh',
-            overflow: 'auto',
-            position: 'relative',
-            boxShadow: '0 4px 20px rgba(0,0,0,0.3)'
-          }}>
-            <button
-              onClick={() => setShowCreateModal(false)}
-              style={{
-                position: 'absolute',
-                top: '15px',
-                right: '15px',
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-                color: 'var(--text-sub)',
-                display: 'flex',
-                alignItems: 'center',
-                padding: '4px'
-              }}
-            >
-              <FiX size={24} />
-            </button>
-            
-            <h3 style={{ marginTop: 0, marginBottom: '20px' }}>Thêm Bệnh Nhân Mới</h3>
-            
-            <PatientForm 
-              onSuccess={handleCreateSuccess}
-              onCancel={() => setShowCreateModal(false)}
-            />
-          </div>
-        </div>
-      )}
     </div>
   )
 }

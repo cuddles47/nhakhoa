@@ -1,5 +1,7 @@
 const express = require('express');
 const router = express.Router();
+const authController = require('../controllers/AuthController');
+const userController = require('../controllers/UserController');
 const patientController = require('../controllers/PatientController');
 const visitController = require('../controllers/VisitController');
 const imageController = require('../controllers/ImageController');
@@ -16,13 +18,25 @@ const upload = multer({
     storage: multer.memoryStorage(),
     limits: {
         fileSize: 10 * 1024 * 1024, // 10MB per file
-        files: 100 // Max 100 files
+        files: 99 // Max 99 files
     }
 });
 
 // Root routes
 router.get('/', indexController.getHello);
 router.get('/api/status', indexController.getStatus);
+
+// Auth routes
+router.post('/api/auth/login', authController.login);
+router.get('/api/auth/profile', authController.getProfile);
+
+// User routes
+router.get('/api/users', userController.getAllUsers);
+router.get('/api/users/:id', userController.getUserById);
+router.post('/api/users', userController.createUser);
+router.put('/api/users/:id', userController.updateUser);
+router.delete('/api/users/:id', userController.deleteUser);
+router.delete('/api/users', userController.deleteAllUsers); // Delete all users
 
 // Patient routes
 router.get('/api/patients', patientController.getAllPatients);
@@ -44,7 +58,7 @@ router.delete('/api/visits/:id', visitController.deleteVisit);
 router.get('/api/images', imageController.getAllImages);
 router.get('/api/visits/:visitId/images', imageController.getImagesByVisitId);
 router.get('/api/visits/:visitId/images/:category', imageController.getImagesByCategory);
-router.post('/api/images', validate(imageSchemas.create), imageController.createImage);
+router.post('/api/images', upload.single('image'), validate(imageSchemas.create), imageController.createImage);
 router.put('/api/images/:id/validation', validate(imageSchemas.updateValidation), imageController.updateValidationStatus);
 router.delete('/api/images/:id', imageController.deleteImage);
 

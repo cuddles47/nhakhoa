@@ -13,10 +13,10 @@ const imageSchemas = {
         
         url_minio: Joi.string()
             .uri()
-            .required()
+            .optional()
+            .allow('', null)
             .messages({
-                'string.uri': 'URL ảnh không hợp lệ',
-                'any.required': 'URL ảnh là bắt buộc'
+                'string.uri': 'URL ảnh không hợp lệ'
             }),
         
         image_category: Joi.string()
@@ -29,7 +29,12 @@ const imageSchemas = {
         
         image_type: Joi.string()
             .valid('frontal', 'lateral_right', 'lateral_left', 'upper_occlusal', 
-                   'lower_occlusal', 'smile', 'profile_right', 'profile_left', 'bite')
+                   'lower_occlusal', 'smile', 'profile_right', 'profile_left', 'bite',
+                   'top_right', 'top_center', 'top_left',
+                   'central_right', 'central_middle', 'central_left',
+                   'bottom_right', 'bottom_center', 'bottom_left',
+                   'position_1', 'position_2', 'position_3', 'position_4', 'position_5',
+                   'position_6', 'position_7', 'position_8', 'position_9')
             .required()
             .messages({
                 'any.only': 'Loại ảnh không hợp lệ',

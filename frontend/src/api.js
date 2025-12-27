@@ -7,6 +7,10 @@ const api = axios.create({
   },
 });
 
+// Auth
+export const login = (credentials) => api.post('/auth/login', credentials);
+export const getProfile = () => api.get('/auth/profile');
+
 // Patients
 export const getPatients = (params = '') => api.get(`/patients${params}`);
 export const getPatientById = (id) => api.get(`/patients/${id}`);

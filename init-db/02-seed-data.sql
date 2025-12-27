@@ -3,11 +3,12 @@
 -- =====================================================
 
 -- Seed Users (Bác sĩ và nhân viên)
+-- Password for all users: 'admin'
 INSERT INTO users (username, password_hash, role, full_name, email) VALUES
-('admin', '$2b$10$YourHashedPasswordHere', 'admin', 'Quản Trị Viên', 'admin@nhakhoa.com'),
-('dr.nguyen', '$2b$10$YourHashedPasswordHere', 'doctor', 'BS. Nguyễn Văn A', 'nguyen@nhakhoa.com'),
-('dr.tran', '$2b$10$YourHashedPasswordHere', 'doctor', 'BS. Trần Thị B', 'tran@nhakhoa.com'),
-('assistant1', '$2b$10$YourHashedPasswordHere', 'assistant', 'Trợ Lý Phạm C', 'pham@nhakhoa.com')
+('admin', '$2b$10$xMKUgpAGaaafR4BH1tSjUuuvdIPNz9JrWxNcqlPO5xD67dtY9Scbi', 'admin', 'Quản Trị Viên', 'admin@nhakhoa.com'),
+('dr.nguyen', '$2b$10$xMKUgpAGaaafR4BH1tSjUuuvdIPNz9JrWxNcqlPO5xD67dtY9Scbi', 'doctor', 'BS. Nguyễn Văn A', 'nguyen@nhakhoa.com'),
+('dr.tran', '$2b$10$xMKUgpAGaaafR4BH1tSjUuuvdIPNz9JrWxNcqlPO5xD67dtY9Scbi', 'doctor', 'BS. Trần Thị B', 'tran@nhakhoa.com'),
+('assistant1', '$2b$10$xMKUgpAGaaafR4BH1tSjUuuvdIPNz9JrWxNcqlPO5xD67dtY9Scbi', 'assistant', 'Trợ Lý Phạm C', 'pham@nhakhoa.com')
 ON CONFLICT (username) DO NOTHING;
 
 -- Seed Doctors (sử dụng user_id thực tế từ bảng users)

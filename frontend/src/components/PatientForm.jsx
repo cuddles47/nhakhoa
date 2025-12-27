@@ -1,8 +1,11 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { createPatient } from '../api'
-import { FiAlertCircle } from 'react-icons/fi'
+import { FiAlertCircle, FiArrowLeft } from 'react-icons/fi'
 
-function PatientForm({ onSuccess, onCancel }) {
+function PatientForm() {
+  const navigate = useNavigate()
+  
   const [formData, setFormData] = useState({
     name: '',
     phone: '',
@@ -33,10 +36,10 @@ function PatientForm({ onSuccess, onCancel }) {
       setLoading(true)
       setError(null)
       const response = await createPatient(formData)
+      const newPatient = response.data.data
       
-      if (onSuccess) {
-        onSuccess(response.data.data)
-      }
+      // Navigate to visits page for the newly created patient
+      navigate(`/patients/${newPatient.id}/visits`)
     } catch (err) {
       // Handle validation errors from backend
       if (err.response?.data?.details) {
@@ -52,9 +55,21 @@ function PatientForm({ onSuccess, onCancel }) {
   }
 
   return (
-    <div>
+    <div className="card">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+        <h2>Thêm Bệnh Nhân Mới</h2>
+        <button 
+          className="button-secondary button" 
+          onClick={() => navigate('/patients')}
+          style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+        >
+          <FiArrowLeft size={16} />
+          Quay lại
+        </button>
+      </div>
+
       {error && (
-        <div className="error" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div className="error" style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '20px' }}>
           <FiAlertCircle size={16} />
           {error}
         </div>
@@ -115,15 +130,13 @@ function PatientForm({ onSuccess, onCancel }) {
         </div>
 
         <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '20px' }}>
-          {onCancel && (
-            <button 
-              type="button" 
-              onClick={onCancel}
-              className="button-secondary button"
-            >
-              Hủy
-            </button>
-          )}
+          <button 
+            type="button" 
+            onClick={() => navigate('/patients')}
+            className="button-secondary button"
+          >
+            Hủy
+          </button>
           <button 
             type="submit" 
             disabled={loading}

@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import Login from './components/Login'
 import Sidebar from './components/Sidebar'
 import PatientList from './components/PatientList'
 import PatientForm from './components/PatientForm'
@@ -7,118 +9,70 @@ import ImageUpload from './components/ImageUpload'
 import BulkUpload from './components/BulkUpload'
 
 function App() {
-  const [activeView, setActiveView] = useState('patients')
-  const [selectedPatient, setSelectedPatient] = useState(null)
-  const [selectedVisit, setSelectedVisit] = useState(null)
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
 
-  // Reset to safe state on mount
   useEffect(() => {
-    // If user hard refreshes on a view that needs data, redirect to patients
-    if ((activeView === 'visits' && !selectedPatient) || 
-        (activeView === 'images' && !selectedVisit)) {
-      setActiveView('patients')
-      setSelectedPatient(null)
-      setSelectedVisit(null)
-    }
+    // Check if user is already logged in
+    const auth = localStorage.getItem('isAuthenticated')
+    setIsAuthenticated(auth === 'true')
+    setIsLoading(false)
   }, [])
 
-  const handleNavigation = (viewId) => {
-    setActiveView(viewId)
-    
-    // Reset selections when going to main views
-    if (viewId === 'new-patient' || viewId === 'patients' || viewId === 'bulk-upload') {
-      setSelectedPatient(null)
-      setSelectedVisit(null)
-    }
+  const handleLogin = () => {
+    setIsAuthenticated(true)
   }
 
-  const handlePatientCreated = (patient) => {
-    setSelectedPatient(patient)
-    setActiveView('visits')
+  const handleLogout = () => {
+    localStorage.removeItem('isAuthenticated')
+    localStorage.removeItem('username')
+    setIsAuthenticated(false)
   }
 
-  const renderContent = () => {
-    switch (activeView) {
-      case 'new-patient':
-        return (
-          <div className="main-content">
-            <PatientForm 
-              onSuccess={handlePatientCreated}
-              onCancel={() => setActiveView('patients')}
-            />
-          </div>
-        )
-      
-      case 'patients':
-        return (
-          <div className="main-content">
-            <PatientList 
-              onSelectPatient={(patient) => {
-                setSelectedPatient(patient)
-                setActiveView('visits')
-              }} 
-            />
-          </div>
-        )
-      
-      case 'visits':
-        if (!selectedPatient) {
-          setActiveView('patients')
-          return null
-        }
-        return (
-          <div className="main-content">
-            <VisitManager 
-              patient={selectedPatient}
-              onSelectVisit={(visit) => {
-                setSelectedVisit(visit)
-                setActiveView('images')
-              }}
-              onBack={() => setActiveView('patients')}
-            />
-          </div>
-        )
-      
-      case 'images':
-        if (!selectedVisit) {
-          setActiveView('visits')
-          return null
-        }
-        return (
-          <div className="main-content">
-            <ImageUpload 
-              visit={selectedVisit}
-              onBack={() => setActiveView('visits')}
-            />
-          </div>
-        )
-      
-      case 'bulk-upload':
-        return (
-          <div className="main-content">
-            <BulkUpload />
-          </div>
-        )
-      
-      default:
-        return (
-          <div className="main-content">
-            <div className="card">
-              <h2>Chào mừng đến Hệ Thống Nha Khoa 🦷</h2>
-              <p>Chọn một mục từ menu bên trái để bắt đầu.</p>
-            </div>
-          </div>
-        )
-    }
+  if (isLoading) {
+    return <div>Loading...</div>
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <BrowserRouter>
+        <Routes>
+          <Route path="/login" element={<Login onLogin={handleLogin} />} />
+          <Route path="*" element={<Navigate to="/login" replace />} />
+        </Routes>
+      </BrowserRouter>
+    )
   }
 
   return (
-    <div className="app-layout">
-      <Sidebar activeView={activeView} onNavigate={handleNavigation} />
-      
-      <main className="main-container">
-        {renderContent()}
-      </main>
+    <BrowserRouter>
+      <div className="app-layout">
+        <Sidebar onLogout={handleLogout} />
+        
+        <main className="main-container">
+          <div className="main-content">
+            <Routes>
+              <Route path="/" element={<Navigate to="/patients" replace />} />
+              <Route path="/patients" element={<PatientList />} />
+              <Route path="/patients/new" element={<PatientForm />} />
+              <Route path="/patients/:patientId/visits" element={<VisitManager />} />
+              <Route path="/visits/:visitId/images" element={<ImageUpload />} />
+              <Route path="/bulk-upload" element={<BulkUpload />} />
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+          </div>
+        </main>
+      </div>
+    </BrowserRouter>
+  )
+}
+
+function NotFound() {
+  return (
+    <div className="card">
+      <h2>404 - Không Tìm Thấy Trang</h2>
+      <p>Trang bạn đang tìm không tồn tại.</p>
+      <a href="/patients" className="button">Quay về Danh sách Bệnh nhân</a>
     </div>
   )
 }

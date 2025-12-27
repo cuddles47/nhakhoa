@@ -247,6 +247,45 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
+  position: relative;
+}
+
+.logout-button {
+  background: none;
+  border: none;
+  color: var(--text-sub);
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 6px;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+}
+
+.logout-button:hover {
+  background: var(--error-bg);
+  color: var(--error);
+}
+
+.logout-button-collapsed {
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--text-sub);
+  cursor: pointer;
+  padding: 12px;
+  border-radius: 6px;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.logout-button-collapsed:hover {
+  background: var(--error-bg);
+  color: var(--error);
 }
 
 .user-avatar {
@@ -294,7 +333,7 @@ body {
 .main-content {
   max-width: 1400px;
   margin: 0 auto;
-  padding: 30px;
+  padding: 0px;
 }
 
 /* Mobile Menu Toggle */

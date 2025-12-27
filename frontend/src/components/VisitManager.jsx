@@ -1,27 +1,49 @@
 import { useState, useEffect } from 'react'
-import { getVisitsByPatient, createVisit, updateVisit } from '../api'
+import { useParams, useNavigate } from 'react-router-dom'
+import { getPatientById, getVisitsByPatient, createVisit, updateVisit } from '../api'
 import { FiPlus, FiArrowLeft, FiImage, FiX, FiClock, FiLoader, FiCheckCircle, FiAlertCircle } from 'react-icons/fi'
 
-function VisitManager({ patient, onSelectVisit, onBack }) {
+function VisitManager() {
+  const { patientId } = useParams()
+  const navigate = useNavigate()
+  
+  const [patient, setPatient] = useState(null)
   const [visits, setVisits] = useState([])
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
 
   useEffect(() => {
-    if (patient) {
-      loadVisits()
+    loadPatientAndVisits()
+  }, [patientId])
+
+  const loadPatientAndVisits = async () => {
+    try {
+      setLoading(true)
+      setError(null)
+      
+      // Fetch patient data
+      const patientResponse = await getPatientById(patientId)
+      const patientData = patientResponse.data.data
+      setPatient(patientData)
+      
+      // Fetch visits
+      const visitsResponse = await getVisitsByPatient(patientId)
+      setVisits(visitsResponse.data.data || [])
+    } catch (err) {
+      console.error(err)
+      setError('Không thể tải thông tin bệnh nhân')
+    } finally {
+      setLoading(false)
     }
-  }, [patient])
+  }
 
   const loadVisits = async () => {
     try {
-      setLoading(true)
-      const response = await getVisitsByPatient(patient.id)
+      const response = await getVisitsByPatient(patientId)
       setVisits(response.data.data || [])
     } catch (err) {
       console.error(err)
-    } finally {
-      setLoading(false)
     }
   }
 
@@ -29,13 +51,13 @@ function VisitManager({ patient, onSelectVisit, onBack }) {
     try {
       const response = await createVisit({
         ...visitData,
-        patient_id: patient.id,
+        patient_id: patientId,
         created_by: 1 // TODO: Use actual logged-in user ID
       })
       const newVisit = response.data.data
       setVisits([newVisit, ...visits])
       setShowCreateModal(false)
-      onSelectVisit(newVisit)
+      navigate(`/visits/${newVisit.id}/images`)
     } catch (err) {
       throw err // Let the form handle the error
     }
@@ -57,11 +79,18 @@ function VisitManager({ patient, onSelectVisit, onBack }) {
     )
   }
 
-  if (!patient) {
+  if (loading) {
+    return <div className="loading">Đang tải...</div>
+  }
+
+  if (error || !patient) {
     return (
       <div className="card">
-        <p>Vui lòng chọn bệnh nhân trước</p>
-        <button className="button" onClick={onBack}>← Quay lại</button>
+        <p style={{ color: 'var(--error)' }}>{error || 'Không tìm thấy bệnh nhân'}</p>
+        <button className="button" onClick={() => navigate('/patients')} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <FiArrowLeft size={16} />
+          Quay lại
+        </button>
       </div>
     )
   }
@@ -86,7 +115,7 @@ function VisitManager({ patient, onSelectVisit, onBack }) {
           </button>
           <button 
             className="button-secondary button"
-            onClick={onBack}
+            onClick={() => navigate('/patients')}
             style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
           >
             <FiArrowLeft size={18} />
@@ -118,11 +147,11 @@ function VisitManager({ patient, onSelectVisit, onBack }) {
                 <td>
                   <button 
                     className="button"
-                    onClick={() => onSelectVisit(visit)}
+                    onClick={() => navigate(`/visits/${visit.id}/images`)}
                     style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
                   >
                     <FiImage size={16} />
-                    Upload Ảnh
+                    Xem Ảnh
                   </button>
                 </td>
               </tr>
