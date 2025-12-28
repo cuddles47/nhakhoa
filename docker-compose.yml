@@ -12,13 +12,6 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init-db:/docker-entrypoint-initdb.d
-    # networks:
-    #   - nhakhoa-network
-    # # healthcheck:
-    # #   test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
-    # #   interval: 10s
-    # #   timeout: 5s
-    # #   retries: 5
 
   minio:
     image: minio/minio:latest
@@ -26,24 +19,39 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+      MINIO_BROWSER_REDIRECT_URL: http://100.93.48.110:9001
+      MINIO_SERVER_URL: http://100.93.48.110:9000
     ports:
       - "9000:9000"     # MinIO API
       - "9001:9001"     # MinIO Console
     volumes:
       - minio_data:/minio/data
-    # networks:
-    #   - nhakhoa-network
     command: server /minio/data --console-address ":9001"
-    # healthcheck:
-    #   test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-    #   interval: 30s
-    #   timeout: 20s
-    #   retries: 3
+
+
+  image-processor:
+    build: ./image-processing-service
+    container_name: nhakhoa-image-processor
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8001
+      DEBUG: ${IMAGE_PROCESSOR_DEBUG:-False}
+      BRACKET_CLASS: ${BRACKET_CLASS:-13}
+      PADDING_PX: ${PADDING_PX:-10}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./image-processing-service:/app
+      - processor_temp:/tmp
+
 
 volumes:
   postgres_data:
     driver: local
   minio_data:
+    driver: local
+  processor_temp:
     driver: local
 
 # networks:
