@@ -1,0 +1,17 @@
+# Image Processing Service Dependencies
+
+# FastAPI and server
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+
+# Image processing
+opencv-python-headless==4.9.0.80
+numpy==1.24.3
+Pillow==10.2.0
+
+# Data augmentation
+albumentations==1.3.1
+
+# Utilities
+python-dotenv==1.0.0
