@@ -107,12 +107,54 @@ const deleteFiles = async (objectNames) => {
   }
 };
 
+// Download file as buffer
+const downloadFile = async (objectName) => {
+  try {
+    return new Promise((resolve, reject) => {
+      const chunks = [];
+      minioClient.getObject(BUCKET_NAME, objectName, (err, dataStream) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        dataStream.on('data', (chunk) => chunks.push(chunk));
+        dataStream.on('end', () => resolve(Buffer.concat(chunks)));
+        dataStream.on('error', reject);
+      });
+    });
+  } catch (error) {
+    console.error('Error downloading file:', error);
+    throw error;
+  }
+};
+
+// Upload from buffer
+const uploadFromBuffer = async (buffer, objectName, contentType = 'application/octet-stream') => {
+  try {
+    await ensureBucket();
+    
+    const metadata = {
+      'Content-Type': contentType
+    };
+    
+    await minioClient.putObject(BUCKET_NAME, objectName, buffer, buffer.length, metadata);
+    
+    const url = `/${BUCKET_NAME}/${objectName}`;
+    return { success: true, url, objectName };
+  } catch (error) {
+    console.error('Error uploading from buffer:', error);
+    throw error;
+  }
+};
+
 module.exports = {
   uploadFile,
   uploadFiles,
+  uploadFromBuffer,
   getFileUrl,
   getPresignedUrl,
   deleteFile,
   deleteFiles,
+  downloadFile,
   ensureBucket
 };

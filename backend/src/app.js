@@ -1,9 +1,18 @@
 const express = require('express');
 const bodyParser = require('body-parser');
+const cors = require('cors');
 const setRoutes = require('./routes/index');
 const { requestLogger, errorHandler, validateRequest } = require('./middleware/index');
 
 const app = express();
+
+// CORS setup - allow all origins in development
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+}));
 
 // Middleware setup
 app.use(bodyParser.json());

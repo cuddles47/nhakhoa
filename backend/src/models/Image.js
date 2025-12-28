@@ -102,6 +102,33 @@ class Image {
         return result.rows[0];
     }
 
+    static async update(id, updateData) {
+        const fields = [];
+        const values = [];
+        let paramIndex = 1;
+
+        // Build dynamic UPDATE query
+        for (const [key, value] of Object.entries(updateData)) {
+            fields.push(`${key} = $${paramIndex}`);
+            values.push(value);
+            paramIndex++;
+        }
+
+        if (fields.length === 0) {
+            throw new Error('No fields to update');
+        }
+
+        values.push(id);
+        const query = `
+            UPDATE images 
+            SET ${fields.join(', ')}
+            WHERE id = $${paramIndex}
+            RETURNING *
+        `;
+        const result = await db.query(query, values);
+        return result.rows[0];
+    }
+
     static async delete(id) {
         // Soft delete
         const query = 'UPDATE images SET deleted_at = CURRENT_TIMESTAMP WHERE id = $1 AND deleted_at IS NULL RETURNING url_minio';
