@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS visits (
     visit_date DATE NOT NULL,
     status VARCHAR(50) DEFAULT 'pending', -- pending, in_progress, completed
     notes TEXT,
+    annotation_file_url VARCHAR(500), -- MinIO URL for patient-specific COCO annotation file
     created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -94,12 +95,22 @@ CREATE TABLE IF NOT EXISTS images (
     deleted_at TIMESTAMP DEFAULT NULL,
     url_processed TEXT,
     processing_status VARCHAR(50) DEFAULT 'pending',
-    processed_at TIMESTAMP
+    processed_at TIMESTAMP,
+    original_filename VARCHAR(255), -- Original filename for COCO mapping
+    has_annotations BOOLEAN DEFAULT false, -- Quick flag for annotation presence
+    annotation_count INTEGER DEFAULT 0, -- Number of annotations for this image
+    width INTEGER, -- Image width in pixels (for COCO to YOLO conversion)
+    height INTEGER -- Image height in pixels (for COCO to YOLO conversion)
 );
 
 COMMENT ON COLUMN images.url_processed IS 'URL to processed image with bounding boxes';
 COMMENT ON COLUMN images.processing_status IS 'Status: pending, processing, completed, failed';
 COMMENT ON COLUMN images.processed_at IS 'Timestamp when processing completed';
+COMMENT ON COLUMN images.original_filename IS 'Original filename from upload for matching with COCO annotations';
+COMMENT ON COLUMN images.has_annotations IS 'Flag to quickly query images with annotations';
+COMMENT ON COLUMN images.annotation_count IS 'Cached count of annotations for this image';
+COMMENT ON COLUMN images.width IS 'Image width in pixels for coordinate conversion';
+COMMENT ON COLUMN images.height IS 'Image height in pixels for coordinate conversion';
 
 -- Tạo bảng validate ảnh (9 tiêu chí)
 CREATE TABLE IF NOT EXISTS image_validations (
@@ -135,6 +146,29 @@ CREATE TABLE IF NOT EXISTS labels (
     labeled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Tạo bảng lưu trữ COCO annotations
+CREATE TABLE IF NOT EXISTS image_annotations (
+    id SERIAL PRIMARY KEY,
+    image_id INTEGER REFERENCES images(id) ON DELETE CASCADE,
+    coco_image_id INTEGER NOT NULL, -- Links to COCO JSON images[].id
+    category_id INTEGER NOT NULL, -- Category ID from COCO
+    category_name VARCHAR(50), -- Category name (tooth number or 'Brace')
+    bbox JSONB NOT NULL, -- COCO bbox format: [x, y, width, height] in pixels
+    area FLOAT, -- Bounding box area
+    source_type VARCHAR(30) DEFAULT 'doctor_upload', -- 'doctor_upload' or 'python_processed' or 'python_subbox'
+    parent_annotation_id INTEGER REFERENCES image_annotations(id) ON DELETE SET NULL, -- For subboxes, links to parent tooth annotation
+    subbox_region VARCHAR(20), -- For subboxes: 'gingival', 'incisal', 'mesial', 'distal'
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+COMMENT ON TABLE image_annotations IS 'Stores original COCO annotations and processed subbox annotations';
+COMMENT ON COLUMN image_annotations.coco_image_id IS 'Original image ID from COCO JSON file';
+COMMENT ON COLUMN image_annotations.bbox IS 'COCO bbox format [x, y, width, height] in pixels';
+COMMENT ON COLUMN image_annotations.category_name IS 'Tooth number (11-44) or Brace';
+COMMENT ON COLUMN image_annotations.source_type IS 'Origin: doctor_upload (from bulk upload), python_processed (refined by Python), python_subbox (4-corner divisions)';
+COMMENT ON COLUMN image_annotations.parent_annotation_id IS 'For subboxes, references the parent tooth annotation';
+COMMENT ON COLUMN image_annotations.subbox_region IS 'For subboxes: gingival, incisal, mesial, distal';
+
 -- =====================================================
 -- INDEXES
 -- =====================================================
@@ -151,10 +185,16 @@ CREATE INDEX IF NOT EXISTS idx_images_category ON images(image_category);
 CREATE INDEX IF NOT EXISTS idx_images_deleted_at ON images(deleted_at);
 CREATE INDEX IF NOT EXISTS idx_images_processing_status ON images(processing_status);
 CREATE INDEX IF NOT EXISTS idx_images_url_processed ON images(visit_id) WHERE url_processed IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_images_original_filename ON images(original_filename) WHERE original_filename IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_images_has_annotations ON images(has_annotations) WHERE has_annotations = true;
 CREATE INDEX IF NOT EXISTS idx_subboxes_image ON subboxes(image_id);
 CREATE INDEX IF NOT EXISTS idx_labels_image ON labels(image_id);
 CREATE INDEX IF NOT EXISTS idx_labels_labeled_by ON labels(labeled_by);
 CREATE INDEX IF NOT EXISTS idx_image_validations_validated_by ON image_validations(validated_by);
+CREATE INDEX IF NOT EXISTS idx_image_annotations_image_id ON image_annotations(image_id);
+CREATE INDEX IF NOT EXISTS idx_image_annotations_coco_image_id ON image_annotations(coco_image_id);
+CREATE INDEX IF NOT EXISTS idx_image_annotations_source_type ON image_annotations(source_type);
+CREATE INDEX IF NOT EXISTS idx_image_annotations_parent_id ON image_annotations(parent_annotation_id) WHERE parent_annotation_id IS NOT NULL;
 
 -- Composite indexes for common query patterns
 CREATE INDEX IF NOT EXISTS idx_visits_status_date ON visits(status, visit_date) WHERE deleted_at IS NULL;
@@ -172,12 +212,9 @@ CREATE INDEX IF NOT EXISTS idx_patients_search ON patients USING gin(to_tsvector
 -- =====================================================
 
 -- Seed Users (Bác sĩ và nhân viên)
--- Password for all users: 'admin'
 INSERT INTO users (username, password_hash, role, full_name, email) VALUES
-('admin', '$2b$10$xMKUgpAGaaafR4BH1tSjUuuvdIPNz9JrWxNcqlPO5xD67dtY9Scbi', 'admin', 'Quản Trị Viên', 'admin@nhakhoa.com'),
-('dr.nguyen', '$2b$10$xMKUgpAGaaafR4BH1tSjUuuvdIPNz9JrWxNcqlPO5xD67dtY9Scbi', 'doctor', 'BS. Nguyễn Văn A', 'nguyen@nhakhoa.com'),
-('dr.tran', '$2b$10$xMKUgpAGaaafR4BH1tSjUuuvdIPNz9JrWxNcqlPO5xD67dtY9Scbi', 'doctor', 'BS. Trần Thị B', 'tran@nhakhoa.com'),
-('assistant1', '$2b$10$xMKUgpAGaaafR4BH1tSjUuuvdIPNz9JrWxNcqlPO5xD67dtY9Scbi', 'assistant', 'Trợ Lý Phạm C', 'pham@nhakhoa.com')
+('admin', '$2b$10$0VFAhLE0MvbXQK/xYdWepu..zrk1Ly.4XW9dIFn20YXdApNRTfB1u', 'admin', 'Quản Trị Viên', 'admin@nhakhoa.com'),
+
 ON CONFLICT (username) DO NOTHING;
 
 -- Seed Doctors (sử dụng user_id thực tế từ bảng users)
