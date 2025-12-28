@@ -35,9 +35,29 @@ function ImageUpload() {
       const imagesResponse = await getImagesByVisit(visitId)
       const allImages = imagesResponse.data.data || []
       
-      setImages(allImages)
-      setRawImages(allImages.filter(img => img.image_category === 'raw'))
-      setStainedImages(allImages.filter(img => img.image_category === 'stained'))
+      // Convert all MinIO paths to proxy URLs
+      const API_URL = import.meta.env.VITE_API_URL || 'http://192.168.1.17:3000';
+      const convertToProxyUrl = (url) => {
+        if (!url) return url;
+        if (url.startsWith('http')) return url;
+        const path = url.replace(/^\/nhakhoa\//, '');
+        return `${API_URL}/api/images/proxy/${path}`;
+      };
+      
+      const allImagesWithProxy = allImages.map(img => ({
+        ...img,
+        url: convertToProxyUrl(img.url),
+        url_processed: convertToProxyUrl(img.url_processed)
+      }));
+      
+      setImages(allImagesWithProxy)
+      const rawImagesData = allImagesWithProxy.filter(img => img.image_category === 'raw')
+      setRawImages(rawImagesData)
+      setStainedImages(allImagesWithProxy.filter(img => img.image_category === 'stained'))
+      
+      // Set processedImages - important for detecting if images are already processed!
+      const processedImagesData = rawImagesData.filter(img => img.url_processed)
+      setProcessedImages(processedImagesData)
     } catch (err) {
       console.error(err)
       setError('Không thể tải thông tin lần khám')
@@ -221,7 +241,7 @@ function ImageUpload() {
                     borderRadius: '3px'
                   }}>
                     <img 
-                      src={image.url_minio} 
+                      src={image.url} 
                       alt={pos.label}
                       style={{ 
                         maxWidth: '100%',
@@ -231,7 +251,7 @@ function ImageUpload() {
                       }}
                       onClick={(e) => {
                         e.stopPropagation()
-                        window.open(image.url_minio, '_blank')
+                        window.open(image.url, '_blank')
                       }}
                       onError={(e) => {
                         e.target.style.display = 'none'
@@ -427,6 +447,7 @@ function ImageUpload() {
             visitId={visitId}
             rawImages={rawImages}
             processedImages={processedImages}
+            stainedImages={stainedImages}
             onProcessClick={handleProcessImages}
             onImagesUpdate={loadImages}
             onImageUpload={handleImageUpload}
@@ -447,7 +468,7 @@ function ImageUpload() {
             flexShrink: 0
           }}>
             <h3 style={{ margin: '0 0 2px 0', fontSize: '14px', color: '#334155', fontWeight: '600' }}>
-              🦷 Ảnh Nhuộm ({stainedImages.length}/9)
+               Ảnh Nhuộm ({stainedImages.length}/9)
             </h3>
             <p style={{ margin: 0, fontSize: '11px', color: '#94a3b8' }}>
               Upload 9 ảnh sau khi nhuộm mảng bám

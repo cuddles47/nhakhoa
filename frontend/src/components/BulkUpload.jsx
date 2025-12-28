@@ -8,6 +8,11 @@ function BulkUpload() {
   const [uploading, setUploading] = useState(false)
   const [uploadResult, setUploadResult] = useState(null)
   const fileInputRef = useRef(null)
+  const annotationInputRef = useRef(null)
+  
+  // Annotation file state
+  const [annotationFile, setAnnotationFile] = useState(null)
+  const [annotationPreview, setAnnotationPreview] = useState(null)
   
   // Patient mapping: { groupKey: { type: 'existing'|'new', patient: {...} } }
   const [patientMappings, setPatientMappings] = useState({})
@@ -204,6 +209,54 @@ function BulkUpload() {
     handleFiles(files)
   }
 
+  const handleAnnotationFileSelect = async (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+
+    try {
+      // Validate JSON format
+      const text = await file.text()
+      const cocoData = JSON.parse(text)
+
+      if (!cocoData.images || !cocoData.annotations || !cocoData.categories) {
+        alert('⚠️ File annotation không đúng định dạng COCO JSON. Cần có: images, annotations, categories')
+        return
+      }
+
+      setAnnotationFile(file)
+
+      // Generate preview statistics
+      const preview = {
+        totalImages: cocoData.images.length,
+        totalAnnotations: cocoData.annotations.length,
+        categories: cocoData.categories.map(c => c.name),
+        imageAnnotationCounts: {}
+      }
+
+      // Count annotations per image
+      cocoData.annotations.forEach(ann => {
+        preview.imageAnnotationCounts[ann.image_id] = 
+          (preview.imageAnnotationCounts[ann.image_id] || 0) + 1
+      })
+
+      const avgAnnotations = (preview.totalAnnotations / preview.totalImages).toFixed(1)
+      preview.avgAnnotations = avgAnnotations
+
+      setAnnotationPreview(preview)
+
+    } catch (error) {
+      alert('❌ Lỗi khi đọc file annotation: ' + error.message)
+    }
+  }
+
+  const handleAnnotationFileClear = () => {
+    setAnnotationFile(null)
+    setAnnotationPreview(null)
+    if (annotationInputRef.current) {
+      annotationInputRef.current.value = ''
+    }
+  }
+
   const handleBrowseClick = () => {
     fileInputRef.current?.click()
   }
@@ -211,6 +264,12 @@ function BulkUpload() {
   const handleUpload = async () => {
     if (parsedData.length === 0) {
       alert('Không có file nào để upload')
+      return
+    }
+
+    // Validate annotation file
+    if (!annotationFile) {
+      alert('⚠️ Vui lòng chọn file annotation (JSON) - Bắt buộc')
       return
     }
 
@@ -235,7 +294,8 @@ function BulkUpload() {
       `- Tạo ${newPatientsCount} bệnh nhân mới\n` +
       `- Gán ${existingPatientsCount} nhóm cho bệnh nhân có sẵn\n` +
       `- Tạo ${parsedData.length} lần khám\n` +
-      `- Upload ${totalImages} ảnh\n\n` +
+      `- Upload ${totalImages} ảnh\n` +
+      `- Với ${annotationPreview?.totalAnnotations || 0} annotations\n\n` +
       `Xác nhận?`
     )
 
@@ -247,10 +307,13 @@ function BulkUpload() {
 
       const formData = new FormData()
       
-      // Add all files
+      // Add all image files
       files.forEach(file => {
         formData.append('images', file)
       })
+
+      // Add annotation file
+      formData.append('annotationFile', annotationFile)
 
       // Merge parsedData with patientMappings
       const enrichedMetadata = parsedData.map(group => {
@@ -272,15 +335,40 @@ setPatientMappings({})
     
       const response = await bulkUploadImages(formData)
       
+      const resultData = response.data.data
+      
+      // Build success message with annotation info
+      let successMsg = `✓ Upload thành công!\n\n`
+      successMsg += `📊 Thống kê:\n`
+      successMsg += `- Bệnh nhân mới: ${resultData.patientsCreated}\n`
+      successMsg += `- Lần khám: ${resultData.visitsCreated}\n`
+      successMsg += `- Ảnh: ${resultData.imagesCreated}\n`
+      successMsg += `- Annotations: ${resultData.annotationsCreated || 0}\n`
+      
+      if (resultData.imagesWithoutAnnotations && resultData.imagesWithoutAnnotations.length > 0) {
+        successMsg += `\n⚠️ Cảnh báo: ${resultData.imagesWithoutAnnotations.length} ảnh không có annotation:\n`
+        successMsg += resultData.imagesWithoutAnnotations.slice(0, 3).join('\n')
+        if (resultData.imagesWithoutAnnotations.length > 3) {
+          successMsg += `\n... và ${resultData.imagesWithoutAnnotations.length - 3} ảnh khác`
+        }
+      }
+      
+      alert(successMsg)
+      
       setUploadResult({
         success: true,
-        data: response.data
+        data: resultData
       })
 
       // Clear files after success
       setFiles([])
       setParsedData([])
       setPatientMappings({})
+      setAnnotationFile(null)
+      setAnnotationPreview(null)
+      if (annotationInputRef.current) {
+        annotationInputRef.current.value = ''
+      }
       
     } catch (error) {
       console.error('Upload error:', error)
@@ -297,8 +385,13 @@ setPatientMappings({})
     setFiles([])
     setParsedData([])
     setUploadResult(null)
+    setAnnotationFile(null)
+    setAnnotationPreview(null)
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
+    }
+    if (annotationInputRef.current) {
+      annotationInputRef.current.value = ''
     }
   }
 
@@ -316,7 +409,15 @@ setPatientMappings({})
             {uploadResult.success ? (
               <>
                 <strong>✓ Upload thành công!</strong>
-                <p>Đã tạo {uploadResult.data.patientsCreated} bệnh nhân, {uploadResult.data.visitsCreated} lần khám, và {uploadResult.data.imagesCreated} ảnh.</p>
+                <p>
+                  Đã tạo {uploadResult.data.patientsCreated} bệnh nhân, {uploadResult.data.visitsCreated} lần khám, 
+                  {uploadResult.data.imagesCreated} ảnh, và {uploadResult.data.annotationsCreated || 0} annotations.
+                </p>
+                {uploadResult.data.imagesWithoutAnnotations && uploadResult.data.imagesWithoutAnnotations.length > 0 && (
+                  <p style={{ color: '#ff9800', marginTop: '8px' }}>
+                    ⚠️ {uploadResult.data.imagesWithoutAnnotations.length} ảnh không có annotation
+                  </p>
+                )}
               </>
             ) : (
               <>
@@ -326,6 +427,61 @@ setPatientMappings({})
             )}
           </div>
         )}
+
+        {/* Annotation File Upload Section */}
+        <div style={{ marginBottom: '20px', padding: '16px', background: '#fff3e0', borderRadius: '8px', border: '2px dashed #ff9800' }}>
+          <h3 style={{ marginBottom: '12px', color: '#f57c00', fontSize: '16px' }}>
+            📋 File Annotation (COCO JSON) - Bắt buộc
+          </h3>
+          <input
+            ref={annotationInputRef}
+            type="file"
+            accept=".json,application/json"
+            onChange={handleAnnotationFileSelect}
+            style={{ marginBottom: '12px', width: '100%' }}
+          />
+          
+          {annotationFile && (
+            <div style={{ padding: '12px', background: '#fff', borderRadius: '4px', border: '1px solid #e0e0e0' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                <div>
+                  <strong style={{ color: '#4CAF50' }}>✓ {annotationFile.name}</strong>
+                  <span style={{ color: '#666', fontSize: '12px', marginLeft: '8px' }}>
+                    ({(annotationFile.size / 1024).toFixed(1)} KB)
+                  </span>
+                </div>
+                <button
+                  onClick={handleAnnotationFileClear}
+                  className="button-secondary"
+                  style={{ padding: '4px 12px', fontSize: '12px' }}
+                >
+                  Xóa
+                </button>
+              </div>
+              
+              {annotationPreview && (
+                <div style={{ fontSize: '13px', color: '#666', paddingTop: '8px', borderTop: '1px solid #e0e0e0' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                    <div> Tổng ảnh: <strong>{annotationPreview.totalImages}</strong></div>
+                    <div> Tổng annotations: <strong>{annotationPreview.totalAnnotations}</strong></div>
+                    {/* <div> Trung bình: <strong>{annotationPreview.avgAnnotations}/ảnh</strong></div>
+                    <div> Loại: <strong>{annotationPreview.categories.length} categories</strong></div> */}
+                  </div>
+                  <div style={{ marginTop: '8px', fontSize: '11px', color: '#999' }}>
+                    Categories: {annotationPreview.categories.slice(0, 8).join(', ')}
+                    {annotationPreview.categories.length > 8 && '...'}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          
+          {!annotationFile && (
+            <p style={{ fontSize: '12px', color: '#f57c00', marginTop: '8px' }}>
+              ⚠️ File annotation COCO JSON là bắt buộc để lưu trữ bounding boxes của răng và mắc cài
+            </p>
+          )}
+        </div>
 
         {/* Drag and Drop Zone */}
         <div

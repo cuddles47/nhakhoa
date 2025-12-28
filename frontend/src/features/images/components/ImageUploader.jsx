@@ -176,7 +176,7 @@ const ImageUploader = ({
           </div>
         ) : hasExisting ? (
           <div className="cell-existing">
-            <img src={hasExisting.url_minio} alt={position.label} />
+            <img src={hasExisting.url} alt={position.label} />
             <div className="existing-badge">Đã có ảnh</div>
           </div>
         ) : (

@@ -82,14 +82,14 @@ const ImageCompare = ({ rawImages = [], stainedImages = [] }) => {
           <div className="compare-slider-view">
             <div className="compare-images" style={{ transform: `scale(${zoom})` }}>
               <div className="image-layer image-raw">
-                <img src={rawImage.url_minio} alt="Ảnh thô" />
+                <img src={rawImage.url} alt="Ảnh thô" />
                 <div className="image-label">Ảnh Thô</div>
               </div>
               <div 
                 className="image-layer image-stained" 
                 style={{ clipPath: `inset(0 ${100 - sliderPosition}% 0 0)` }}
               >
-                <img src={stainedImage.url_minio} alt="Ảnh nhuộm" />
+                <img src={stainedImage.url} alt="Ảnh nhuộm" />
                 <div className="image-label">Ảnh Nhuộm</div>
               </div>
               <div 
@@ -114,7 +114,7 @@ const ImageCompare = ({ rawImages = [], stainedImages = [] }) => {
               <h4>Ảnh Thô</h4>
               {hasRaw ? (
                 <div className="single-image" style={{ transform: `scale(${zoom})` }}>
-                  <img src={rawImage.url_minio} alt="Ảnh thô" />
+                  <img src={rawImage.url} alt="Ảnh thô" />
                 </div>
               ) : (
                 <div className="no-image">Chưa có ảnh</div>
@@ -124,7 +124,7 @@ const ImageCompare = ({ rawImages = [], stainedImages = [] }) => {
               <h4>Ảnh Nhuộm</h4>
               {hasStained ? (
                 <div className="single-image" style={{ transform: `scale(${zoom})` }}>
-                  <img src={stainedImage.url_minio} alt="Ảnh nhuộm" />
+                  <img src={stainedImage.url} alt="Ảnh nhuộm" />
                 </div>
               ) : (
                 <div className="no-image">Chưa có ảnh</div>

@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react';
 import Button from '../../../components/ui/Button';
 import LoadingSpinner from '../../../components/ui/LoadingSpinner';
-import { FiUpload } from 'react-icons/fi';
+import { FiUpload, FiX } from 'react-icons/fi';
 
 const ProcessedImageViewer = ({ 
   visitId, 
   rawImages = [], 
   processedImages = [],
+  stainedImages = [],
   onProcessClick,
   onImagesUpdate,
   onImageUpload
@@ -14,6 +15,7 @@ const ProcessedImageViewer = ({
   const [viewMode, setViewMode] = useState('raw'); // 'raw' or 'processed'
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState(null);
+  const [lightboxImage, setLightboxImage] = useState(null); // { url, label, position, stainedUrl }
 
   const hasProcessed = processedImages.some(img => img.url_processed);
   
@@ -35,6 +37,35 @@ const ProcessedImageViewer = ({
   }, [hasProcessed, processing]);
   
   const displayImages = viewMode === 'processed' ? processedImages : rawImages;
+
+  // Đóng lightbox khi nhấn ESC
+  useEffect(() => {
+    const handleEsc = (e) => {
+      if (e.key === 'Escape' && lightboxImage) {
+        setLightboxImage(null);
+      }
+    };
+    window.addEventListener('keydown', handleEsc);
+    return () => window.removeEventListener('keydown', handleEsc);
+  }, [lightboxImage]);
+
+  // Tìm ảnh stained cùng vị trí
+  const findStainedImage = (position) => {
+    return stainedImages.find(img => {
+      if (img.image_index === position.index) return true;
+      
+      const imgType = img.image_type?.toLowerCase() || '';
+      const posType = position.type.toLowerCase();
+      
+      if (imgType.includes(posType)) return true;
+      
+      if (position.altTypes) {
+        return position.altTypes.some(alt => imgType.includes(alt.toLowerCase()));
+      }
+      
+      return false;
+    });
+  };
   
   console.log('ProcessedImageViewer render:', {
     viewMode,
@@ -99,7 +130,7 @@ const ProcessedImageViewer = ({
 
       const imageUrl = viewMode === 'processed' && image?.url_processed
         ? image.url_processed
-        : image?.url_minio;
+        : image?.url;
 
       return (
         <div 
@@ -145,7 +176,13 @@ const ProcessedImageViewer = ({
                   }}
                   onClick={(e) => {
                     e.stopPropagation();
-                    window.open(imageUrl, '_blank');
+                    const stainedImage = findStainedImage(pos);
+                    setLightboxImage({ 
+                      url: imageUrl, 
+                      label: pos.label,
+                      position: pos,
+                      stainedUrl: stainedImage?.url
+                    });
                   }}
                   onError={(e) => {
                     e.target.style.display = 'none';
@@ -228,6 +265,195 @@ const ProcessedImageViewer = ({
       overflow: 'hidden',
       height: '100%'
     }}>
+      {/* Lightbox Overlay - Split Screen */}
+      {lightboxImage && (
+        <div 
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.95)',
+            zIndex: 9999,
+            display: 'flex',
+            flexDirection: 'column',
+            padding: '20px',
+            cursor: 'pointer'
+          }}
+          onClick={() => setLightboxImage(null)}
+        >
+          {/* Nút đóng */}
+          <button
+            style={{
+              position: 'absolute',
+              top: '20px',
+              right: '20px',
+              background: 'rgba(255, 255, 255, 0.2)',
+              border: 'none',
+              color: 'white',
+              width: '40px',
+              height: '40px',
+              borderRadius: '50%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              fontSize: '20px',
+              transition: 'all 0.2s',
+              backdropFilter: 'blur(10px)',
+              zIndex: 10000
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              setLightboxImage(null);
+            }}
+            onMouseEnter={(e) => {
+              e.target.style.background = 'rgba(255, 255, 255, 0.3)';
+            }}
+            onMouseLeave={(e) => {
+              e.target.style.background = 'rgba(255, 255, 255, 0.2)';
+            }}
+          >
+            <FiX size={24} />
+          </button>
+
+          {/* Label */}
+          <div style={{
+            position: 'absolute',
+            top: '20px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            background: 'rgba(255, 255, 255, 0.2)',
+            backdropFilter: 'blur(10px)',
+            color: 'white',
+            padding: '8px 20px',
+            borderRadius: '20px',
+            fontSize: '14px',
+            fontWeight: '600',
+            zIndex: 10000
+          }}>
+            {lightboxImage.label}
+          </div>
+
+          {/* Split Screen Container */}
+          <div style={{
+            flex: 1,
+            display: 'flex',
+            gap: '20px',
+            alignItems: 'center',
+            justifyContent: 'center',
+            marginTop: '60px',
+            marginBottom: '40px'
+          }}>
+            {/* Left: Raw/Processed */}
+            <div style={{
+              flex: 1,
+              height: '100%',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}>
+              <div style={{
+                background: 'rgba(255, 255, 255, 0.1)',
+                backdropFilter: 'blur(10px)',
+                color: 'white',
+                padding: '6px 16px',
+                borderRadius: '12px',
+                fontSize: '13px',
+                fontWeight: '600',
+                marginBottom: '12px'
+              }}>
+                {viewMode === 'processed' ? ' Processed' : ' Raw'}
+              </div>
+              <img 
+                src={lightboxImage.url}
+                alt={lightboxImage.label}
+                style={{
+                  maxWidth: '100%',
+                  maxHeight: '100%',
+                  objectFit: 'contain',
+                  borderRadius: '8px',
+                  boxShadow: '0 20px 60px rgba(0, 0, 0, 0.5)'
+                }}
+                onClick={(e) => e.stopPropagation()}
+              />
+            </div>
+
+            {/* Divider */}
+            <div style={{
+              width: '2px',
+              height: '80%',
+              background: 'linear-gradient(to bottom, transparent, rgba(255,255,255,0.3), transparent)'
+            }} />
+
+            {/* Right: Stained */}
+            <div style={{
+              flex: 1,
+              height: '100%',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}>
+              <div style={{
+                background: 'rgba(147, 51, 234, 0.3)',
+                backdropFilter: 'blur(10px)',
+                color: 'white',
+                padding: '6px 16px',
+                borderRadius: '12px',
+                fontSize: '13px',
+                fontWeight: '600',
+                marginBottom: '12px'
+              }}>
+                 Stained
+              </div>
+              {lightboxImage.stainedUrl ? (
+                <img 
+                  src={lightboxImage.stainedUrl}
+                  alt={`${lightboxImage.label} Stained`}
+                  style={{
+                    maxWidth: '100%',
+                    maxHeight: '100%',
+                    objectFit: 'contain',
+                    borderRadius: '8px',
+                    boxShadow: '0 20px 60px rgba(0, 0, 0, 0.5)'
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                />
+              ) : (
+                <div style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'rgba(255, 255, 255, 0.5)',
+                  fontSize: '14px',
+                  padding: '40px'
+                }}>
+                  <div style={{ fontSize: '48px', marginBottom: '16px' }}>🔍</div>
+                  <div>Không có ảnh stained cho vị trí này</div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Hint */}
+          <div style={{
+            position: 'absolute',
+            bottom: '20px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            color: 'rgba(255, 255, 255, 0.6)',
+            fontSize: '12px',
+            textAlign: 'center'
+          }}>
+            Click bên ngoài hoặc nhấn ESC để đóng
+          </div>
+        </div>
+      )}
+
       <div style={{ 
         padding: '8px 12px', 
         borderBottom: '1px solid #f1f5f9',
@@ -239,10 +465,10 @@ const ProcessedImageViewer = ({
       }}>
         <div>
           <h3 style={{ margin: '0 0 2px 0', fontSize: '14px', color: '#334155', fontWeight: '600' }}>
-            {viewMode === 'processed' ? '🎨 Ảnh đã xử lý' : '📷 Ảnh RAW'} ({(viewMode === 'processed' ? processedImages.filter(img => img.url_processed) : rawImages).length}/9)
+            {viewMode === 'processed' ? ' Ảnh đã xử lý' : ' Ảnh RAW'} ({(viewMode === 'processed' ? processedImages.filter(img => img.url_processed) : rawImages).length}/9)
           </h3>
           <p style={{ margin: 0, fontSize: '11px', color: '#94a3b8' }}>
-            {viewMode === 'raw' ? 'Upload 9 ảnh gốc (chưa nhuộm)' : 'Ảnh đã xử lý qua Python service'}
+            {viewMode === 'raw' ? 'Upload 9 ảnh gốc (chưa nhuộm) - Click ảnh để so sánh với stained' : 'Ảnh hậu xử lý - Click để so sánh với stained'}
           </p>
         </div>
         
@@ -253,7 +479,7 @@ const ProcessedImageViewer = ({
               disabled={processing}
               variant="primary"
             >
-              {processing ? '⏳ Đang xử lý...' : '🚀 Xử lý ảnh'}
+              {processing ? ' Đang xử lý...' : ' Xử lý ảnh'}
             </Button>
           )}
           
@@ -264,14 +490,14 @@ const ProcessedImageViewer = ({
                 variant={viewMode === 'raw' ? 'primary' : 'secondary'}
                 size="small"
               >
-                📸 Raw
+                 Raw
               </Button>
               <Button
                 onClick={() => setViewMode('processed')}
                 variant={viewMode === 'processed' ? 'primary' : 'secondary'}
                 size="small"
               >
-                🎨 Processed
+                 Processed
               </Button>
             </div>
           )}
