@@ -81,13 +81,40 @@ class Image {
     }
 
     static async create(imageData) {
-        const { visit_id, url_minio, image_category, image_type, image_index, validation_status, notes } = imageData;
+        // Extract fields, handling both url and url_minio (for backward compatibility)
+        const {
+            visit_id,
+            url,
+            url_minio, // deprecated, use 'url' instead
+            image_category,
+            image_type,
+            image_index,
+            validation_status,
+            notes,
+            original_filename,
+            has_annotations,
+            annotation_count,
+            width,
+            height
+        } = imageData;
+        
+        // Use 'url' if provided, otherwise fall back to 'url_minio'
+        const urlValue = url || url_minio;
+        
         const query = `
-            INSERT INTO images (visit_id, url_minio, image_category, image_type, image_index, validation_status, notes)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO images (
+                visit_id, url, image_category, image_type, image_index, 
+                validation_status, notes, original_filename, has_annotations, 
+                annotation_count, width, height
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             RETURNING *
         `;
-        const result = await db.query(query, [visit_id, url_minio, image_category, image_type, image_index, validation_status, notes]);
+        const result = await db.query(query, [
+            visit_id, urlValue, image_category, image_type, image_index,
+            validation_status, notes, original_filename, has_annotations,
+            annotation_count, width, height
+        ]);
         return result.rows[0];
     }
 
@@ -131,7 +158,7 @@ class Image {
 
     static async delete(id) {
         // Soft delete
-        const query = 'UPDATE images SET deleted_at = CURRENT_TIMESTAMP WHERE id = $1 AND deleted_at IS NULL RETURNING url_minio';
+        const query = 'UPDATE images SET deleted_at = CURRENT_TIMESTAMP WHERE id = $1 AND deleted_at IS NULL RETURNING url';
         const result = await db.query(query, [id]);
         return result.rows[0];
     }

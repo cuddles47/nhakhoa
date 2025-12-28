@@ -21,13 +21,18 @@ class ImageController {
             const storageService = require('../services/storage');
             const imagesWithUrls = await Promise.all(
                 images.map(async (image) => {
-                    // Extract object name from url_minio (remove bucket prefix)
-                    const objectName = image.url_minio.replace(/^\/[^/]+\//, '');
+                    // Skip if no URL
+                    if (!image.url) {
+                        return image;
+                    }
+                    
+                    // Extract object name from url (remove bucket prefix)
+                    const objectName = image.url.replace(/^\/[^/]+\//, '');
                     const presignedResult = await storageService.getPresignedUrl(objectName, 3600); // 1 hour expiry
                     
                     return {
                         ...image,
-                        url_minio: presignedResult.success ? presignedResult.url : image.url_minio
+                        url: presignedResult.success ? presignedResult.url : image.url
                     };
                 })
             );

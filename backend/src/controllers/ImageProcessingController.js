@@ -1,6 +1,7 @@
 const imageProcessingService = require('../services/imageProcessingService');
 const storageService = require('../services/storage');
-const { Image } = require('../models');
+const { Image, Annotation, Visit } = require('../models');
+const annotationService = require('../services/annotationService');
 const AdmZip = require('adm-zip');
 const path = require('path');
 const fs = require('fs').promises;
@@ -17,6 +18,30 @@ class ImageProcessingController {
     console.log('Request headers:', req.headers);
 
     try {
+      // 1. Fetch visit to get annotation file URL
+      const visit = await Visit.findById(visitId);
+      if (!visit) {
+        return res.status(404).json({
+          success: false,
+          error: 'Visit not found'
+        });
+      }
+
+      // 2. Download patient-specific COCO file from MinIO if available
+      let cocoData = null;
+      if (visit.annotation_file_url) {
+        try {
+          console.log(`Downloading COCO file from: ${visit.annotation_file_url}`);
+          const cocoObjectName = visit.annotation_file_url.replace(/^\/[^/]+\//, '');
+          const cocoBuffer = await storageService.downloadFile(cocoObjectName);
+          cocoData = JSON.parse(cocoBuffer.toString('utf-8'));
+          console.log(`Loaded COCO: ${cocoData.images.length} images, ${cocoData.annotations.length} annotations`);
+        } catch (error) {
+          console.error('Failed to download COCO file:', error.message);
+          // Continue without COCO - will use database annotations as fallback
+        }
+      }
+
       const rawImages = await Image.findByCategory(visitId, 'raw');
       
       console.log(`Found ${rawImages.length} raw images`);
@@ -34,8 +59,8 @@ class ImageProcessingController {
       const annotations = [];
 
       for (const img of rawImages) {
-        console.log(`Processing image ${img.id}: index=${img.image_index}, type=${img.image_type}, url=${img.url_minio}`);
-        const objectName = img.url_minio.replace(/^\/[^/]+\//, '');
+        console.log(`Processing image ${img.id}: index=${img.image_index}, type=${img.image_type}, url=${img.url}`);
+        const objectName = img.url.replace(/^\/[^/]+\//, '');
         console.log(`Downloading from MinIO: ${objectName}`);
         
         const imageBuffer = await storageService.downloadFile(objectName);
@@ -49,12 +74,32 @@ class ImageProcessingController {
           filename: imageFilename
         });
 
-        // Dummy annotation (sẽ thay bằng real từ ML service)
-        const dummyAnnotation = `11 0.5 0.5 0.1 0.15\n13 0.5 0.5 0.05 0.05`;
-        annotations.push({
-          buffer: Buffer.from(dummyAnnotation),
-          filename: `image_${img.id}.txt`
-        });
+        // Fetch REAL annotations from database
+        const dbAnnotations = await Annotation.findByImageId(img.id);
+        
+        if (dbAnnotations.length === 0) {
+          console.warn(`No annotations found for image ${img.id}, using dummy data`);
+          // Fallback to dummy annotation if no annotations in DB
+          const dummyAnnotation = `11 0.5 0.5 0.1 0.15\n13 0.5 0.5 0.05 0.05`;
+          annotations.push({
+            buffer: Buffer.from(dummyAnnotation),
+            filename: `image_${img.id}.txt`
+          });
+        } else {
+          // Convert COCO annotations to YOLO format
+          const imageWidth = img.width || 6240;  // Use stored width or default
+          const imageHeight = img.height || 4160;  // Use stored height or default
+          
+          const yoloAnnotations = Annotation.convertToYOLO(dbAnnotations, imageWidth, imageHeight);
+          const yoloText = Annotation.formatYOLOText(yoloAnnotations);
+          
+          console.log(`Generated YOLO annotations for image ${img.id}: ${yoloAnnotations.length} annotations`);
+          
+          annotations.push({
+            buffer: Buffer.from(yoloText),
+            filename: `image_${img.id}.txt`
+          });
+        }
       }
 
       console.log(`Prepared ${images.length} images and ${annotations.length} annotations`);
@@ -98,7 +143,7 @@ class ImageProcessingController {
         // Extract original filename and replace "raw_" with "processed_"
         // Example: "raw_top_right_jpg.rf.d2fba3a75ed22a3aff0db8adb1031bf3.jpg" 
         //       -> "processed_top_right_jpg.rf.d2fba3a75ed22a3aff0db8adb1031bf3.jpg"
-        const originalFilename = path.basename(originalImage.url_minio);
+        const originalFilename = path.basename(originalImage.url);
         const processedFilename = originalFilename.replace(/^raw_/, 'processed_');
         
         console.log(`Original filename: ${originalFilename}`);

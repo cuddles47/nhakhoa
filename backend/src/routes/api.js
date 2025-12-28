@@ -64,7 +64,10 @@ router.put('/api/images/:id/validation', validate(imageSchemas.updateValidation)
 router.delete('/api/images/:id', imageController.deleteImage);
 
 // Bulk upload routes
-router.post('/api/bulk-upload', upload.array('images', 100), bulkUploadController.bulkUpload);
+router.post('/api/bulk-upload', upload.fields([
+    { name: 'images', maxCount: 100 },
+    { name: 'annotationFile', maxCount: 1 }
+]), bulkUploadController.bulkUpload);
 router.get('/api/bulk-upload/history', bulkUploadController.getUploadHistory);
 
 // Image processing routes
