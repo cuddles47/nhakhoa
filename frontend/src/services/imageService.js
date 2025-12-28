@@ -73,6 +73,43 @@ class ImageService {
     const response = await apiClient.get('/bulk-upload/history');
     return response.data;
   }
+
+  /**
+   * Process raw images (send to Python service)
+   */
+  async processImages(visitId) {
+    console.log('imageService.processImages called with visitId:', visitId);
+    console.log('API URL:', import.meta.env.VITE_API_URL);
+    
+    try {
+      const url = `/api/visits/${visitId}/process-images`;
+      console.log('Making POST request to:', url);
+      
+      const response = await apiClient.post(url, {}, {
+        timeout: 300000 // 5 minutes timeout
+      });
+      
+      console.log('Response received:', response);
+      return response.data;
+    } catch (error) {
+      console.error('imageService.processImages error:', error);
+      console.error('Error details:', {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+        config: error.config
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Get processing status
+   */
+  async getProcessingStatus(visitId) {
+    const response = await apiClient.get(`/api/visits/${visitId}/processing-status`);
+    return response.data;
+  }
 }
 
 export default new ImageService();

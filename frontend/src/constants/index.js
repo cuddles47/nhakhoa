@@ -46,15 +46,15 @@ export const VALIDATION_STATUS_LABELS = {
 
 // Image Positions (3x3 grid for dental orthodontic images)
 export const IMAGE_POSITIONS = [
-  { index: 1, type: 'upper_right', label: 'Trên phải' },
-  { index: 2, type: 'upper_center', label: 'Trên giữa' },
-  { index: 3, type: 'upper_left', label: 'Trên trái' },
-  { index: 4, type: 'middle_right', label: 'Giữa phải' },
-  { index: 5, type: 'middle_center', label: 'Giữa' },
-  { index: 6, type: 'middle_left', label: 'Giữa trái' },
-  { index: 7, type: 'lower_right', label: 'Dưới phải' },
-  { index: 8, type: 'lower_center', label: 'Dưới giữa' },
-  { index: 9, type: 'lower_left', label: 'Dưới trái' }
+  { value: 1, index: 1, type: 'upper_right', label: 'Trên phải' },
+  { value: 2, index: 2, type: 'upper_center', label: 'Trên giữa' },
+  { value: 3, index: 3, type: 'upper_left', label: 'Trên trái' },
+  { value: 4, index: 4, type: 'middle_right', label: 'Giữa phải' },
+  { value: 5, index: 5, type: 'middle_center', label: 'Giữa' },
+  { value: 6, index: 6, type: 'middle_left', label: 'Giữa trái' },
+  { value: 7, index: 7, type: 'lower_right', label: 'Dưới phải' },
+  { value: 8, index: 8, type: 'lower_center', label: 'Dưới giữa' },
+  { value: 9, index: 9, type: 'lower_left', label: 'Dưới trái' }
 ];
 
 // Pagination

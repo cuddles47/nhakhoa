@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { getVisitById, getImagesByVisit, createImage, updateImageValidation } from '../api'
 import { FiArrowLeft, FiImage, FiUpload, FiCheck, FiX, FiCheckCircle, FiXCircle } from 'react-icons/fi'
+import ProcessedImageViewer from '../features/images/components/ProcessedImageViewer'
+import imageService from '../services/imageService'
 
 function ImageUpload() {
   const { visitId } = useParams()
@@ -11,6 +13,7 @@ function ImageUpload() {
   const [images, setImages] = useState([])
   const [rawImages, setRawImages] = useState([])
   const [stainedImages, setStainedImages] = useState([])
+  const [processedImages, setProcessedImages] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
@@ -48,11 +51,58 @@ function ImageUpload() {
       const response = await getImagesByVisit(visitId)
       const allImages = response.data.data || []
       
-      setImages(allImages)
-      setRawImages(allImages.filter(img => img.image_category === 'raw'))
-      setStainedImages(allImages.filter(img => img.image_category === 'stained'))
+      // Convert all MinIO paths to proxy URLs
+      const API_URL = import.meta.env.VITE_API_URL || 'http://192.168.1.17:3000';
+      const convertToProxyUrl = (url) => {
+        if (!url) return url;
+        if (url.startsWith('http')) return url; // Already full URL
+        // Convert /nhakhoa/visits/... to /api/images/proxy/visits/...
+        const path = url.replace(/^\/nhakhoa\//, '');
+        return `${API_URL}/api/images/proxy/${path}`;
+      };
+      
+      const allImagesWithProxy = allImages.map(img => ({
+        ...img,
+        url: convertToProxyUrl(img.url),
+        url_processed: convertToProxyUrl(img.url_processed)
+      }));
+      
+      setImages(allImagesWithProxy)
+      const rawImagesData = allImagesWithProxy.filter(img => img.image_category === 'raw')
+      setRawImages(rawImagesData)
+      setStainedImages(allImagesWithProxy.filter(img => img.image_category === 'stained'))
+      
+      // Update processedImages - use rawImages that have url_processed
+      const processedImagesData = rawImagesData.filter(img => img.url_processed)
+      setProcessedImages(processedImagesData)
+      
+      console.log('Images reloaded with proxy URLs:', {
+        total: allImagesWithProxy.length,
+        raw: rawImagesData.length,
+        processed: processedImagesData.length,
+        sampleUrl: rawImagesData[0]?.url
+      })
     } catch (err) {
       console.error(err)
+    }
+  }
+
+  const handleProcessImages = async () => {
+    try {
+      console.log('Starting image processing for visit:', visitId);
+      const result = await imageService.processImages(visitId);
+      console.log('Processing result:', result);
+      
+      if (result.success) {
+        setProcessedImages(result.data);
+        // Reload all images to get updated URLs
+        await loadImages();
+      }
+      
+      return result;
+    } catch (err) {
+      console.error('Error processing images:', err);
+      throw new Error(err.response?.data?.error || 'Không thể xử lý ảnh');
     }
   }
 
@@ -363,31 +413,24 @@ function ImageUpload() {
         gridTemplateColumns: '1fr 1fr', 
         gap: '1px',
         background: '#e2e8f0',
-        minHeight: '0'
+        minHeight: '0',
+        marginBottom: '24px'
       }}>
-        {/* Left Panel - RAW Images */}
+        {/* Left Panel - RAW/Processed Images */}
         <div style={{ 
           background: '#fff', 
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden'
         }}>
-          <div style={{ 
-            padding: '8px 12px', 
-            borderBottom: '1px solid #f1f5f9',
-            background: '#f8fafc',
-            flexShrink: 0
-          }}>
-            <h3 style={{ margin: '0 0 2px 0', fontSize: '14px', color: '#334155', fontWeight: '600' }}>
-              📷 Ảnh RAW ({rawImages.length}/9)
-            </h3>
-            <p style={{ margin: 0, fontSize: '11px', color: '#94a3b8' }}>
-              Upload 9 ảnh gốc (chưa nhuộm)
-            </p>
-          </div>
-          <div style={{ padding: '8px' }}>
-            {renderImageGrid('raw', rawImages)}
-          </div>
+          <ProcessedImageViewer
+            visitId={visitId}
+            rawImages={rawImages}
+            processedImages={processedImages}
+            onProcessClick={handleProcessImages}
+            onImagesUpdate={loadImages}
+            onImageUpload={handleImageUpload}
+          />
         </div>
 
         {/* Right Panel - Stained Images */}
@@ -415,6 +458,7 @@ function ImageUpload() {
           </div>
         </div>
       </div>
+
     </div>
   )
 }
