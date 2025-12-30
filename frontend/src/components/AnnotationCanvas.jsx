@@ -266,7 +266,7 @@ const AnnotationCanvas = ({
           </div>
           <div style={{ fontSize: '12px', color: '#cbd5e1' }}>
             Status: {
-              hoveredSubbox.plaque_status === null ? '⚪ Not annotated' :
+              hoveredSubbox.annotated_by === null ? '⚪ Not annotated' :
               hoveredSubbox.plaque_status === 0 ? '🟢 No plaque' :
               '🔴 Has plaque'
             }

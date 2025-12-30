@@ -12,10 +12,7 @@ class ImageProcessingController {
     const { visitId } = req.params;
     let tempDir = null;
 
-    console.log('===== PROCESS IMAGES REQUEST RECEIVED =====');
-    console.log('Visit ID:', visitId);
-    console.log('Request method:', req.method);
-    console.log('Request headers:', req.headers);
+    console.log('===== PROCESS IMAGES REQUEST RECEIVED =====', { visitId });
 
     try {
       // 1. Fetch visit to get annotation file URL
@@ -59,12 +56,9 @@ class ImageProcessingController {
       const annotations = [];
 
       for (const img of rawImages) {
-        console.log(`Processing image ${img.id}: index=${img.image_index}, type=${img.image_type}, url=${img.url}`);
+        console.log(`Processing image ${img.id} (type=${img.image_type})`);
         const objectName = img.url.replace(/^\/[^/]+\//, '');
-        console.log(`Downloading from MinIO: ${objectName}`);
-        
         const imageBuffer = await storageService.downloadFile(objectName);
-        console.log(`Downloaded ${imageBuffer.length} bytes for image ${img.id}`);
         
         // Use image ID instead of image_index (which is null) to create unique filename
         const imageFilename = `image_${img.id}.jpg`;
@@ -345,7 +339,6 @@ class ImageProcessingController {
     for (let i = 0; i < Math.min(teeth.length, dbTeeth.length); i++) {
       const cls = teeth[i].classId;
       toothClassIdMap[cls] = dbTeeth[i].id;
-      console.log(`📍 Map YOLO tooth class ${cls} (pos ${i}) → DB tooth id ${dbTeeth[i].id}`);
     }
     
     // For diagnostics, show expected subbox counts per tooth (from annotations)
@@ -365,7 +358,6 @@ class ImageProcessingController {
         console.log(`⚠️ Skipping subbox with invalid tooth_id=${subbox.toothId} (no mapping to DB tooth)`);
         continue;
       }
-      console.log(`🔗 Subbox toothId ${subbox.toothId} → parent DB id ${parentId}`);
       // Assign region sequentially for each toothId
       if (!(subbox.toothId in regionIndexMap)) regionIndexMap[subbox.toothId] = 0;
       const region = regionNames[regionIndexMap[subbox.toothId] % 4];
@@ -374,8 +366,8 @@ class ImageProcessingController {
       const area = subbox.w * subbox.h;
       const plaqueStatus = subbox.classId === 1 ? 1 : 0; // 1 = plaque, 0 = no plaque
       await pool.query(`
-        INSERT INTO image_annotations (image_id, coco_image_id, category_id, category_name, bbox, area, parent_annotation_id, subbox_region, source_type, plaque_status)
-        SELECT $1, $2, $3, $4::varchar(50), $5::jsonb, $6, $7, $8::varchar(20), 'python_subbox', $9
+        INSERT INTO image_annotations (image_id, coco_image_id, category_id, category_name, bbox, area, parent_annotation_id, subbox_region, source_type, plaque_status, predicted_plaque)
+        SELECT $1, $2, $3, $4::varchar(50), $5::jsonb, $6, $7, $8::varchar(20), 'python_subbox', 0, $9
         WHERE NOT EXISTS (
           SELECT 1 FROM image_annotations WHERE image_id = $1 AND parent_annotation_id = $7 AND subbox_region = $8::varchar(20)
         )
@@ -388,10 +380,9 @@ class ImageProcessingController {
         area,
         parentId,
         region,
-        plaqueStatus
+        /* predicted_plaque */ plaqueStatus
       ]);
       subboxCount++;
-      console.log(`✅ Created subbox: parent=${parentId}, region=${region}, status=${plaqueStatus}`);
     }
     console.log(`Completed: created ${subboxCount} subboxes for image ${imageId}`);
 
@@ -410,7 +401,5 @@ const controller = new ImageProcessingController();
 
 module.exports = {
   processRawImages: controller.processRawImages.bind(controller),
-  getProcessingStatus: controller.getProcessingStatus.bind(controller),
-  // Expose controller for internal tests and scripts
-  _controller: controller
+  getProcessingStatus: controller.getProcessingStatus.bind(controller)
 };

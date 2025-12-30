@@ -40,6 +40,7 @@ class AnnotationController {
           a.parent_annotation_id,
           a.subbox_region,
           a.plaque_status,
+          a.predicted_plaque,
           a.annotated_by,
           a.annotated_at,
           u.full_name as annotated_by_name
@@ -81,6 +82,7 @@ class AnnotationController {
               bbox: row.bbox,
               area: row.area,
               plaque_status: row.plaque_status,
+              predicted_plaque: row.predicted_plaque,
               annotated_by: row.annotated_by ? {
                 id: row.annotated_by,
                 name: row.annotated_by_name
@@ -93,8 +95,10 @@ class AnnotationController {
       
       // Calculate progress stats
       const totalSubboxes = annotationsResult.rows.filter(r => r.parent_annotation_id).length;
-      const annotatedSubboxes = annotationsResult.rows.filter(r => r.parent_annotation_id && r.plaque_status !== null).length;
-      const plaqueDetected = annotationsResult.rows.filter(r => r.parent_annotation_id && r.plaque_status === 1).length;
+      // Consider a subbox annotated only when a clinician annotated it (annotated_by IS NOT NULL)
+      const annotatedSubboxes = annotationsResult.rows.filter(r => r.parent_annotation_id && r.annotated_by !== null).length;
+      // Count plaque detected only from clinician annotations (plaque_status === 1 and annotated_by IS NOT NULL)
+      const plaqueDetected = annotationsResult.rows.filter(r => r.parent_annotation_id && r.annotated_by !== null && r.plaque_status === 1).length;
       
       res.json({
         success: true,

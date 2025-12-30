@@ -161,8 +161,34 @@ CREATE TABLE IF NOT EXISTS image_annotations (
     plaque_status INTEGER DEFAULT NULL, -- 0 = no plaque, 1 = has plaque, NULL = not annotated yet
     annotated_by INTEGER REFERENCES users(id) ON DELETE SET NULL, -- Doctor who made the annotation
     annotated_at TIMESTAMP DEFAULT NULL, -- When the plaque annotation was made
+    predicted_plaque INTEGER DEFAULT NULL, -- Model predicted plaque (0/1) stored separately
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Ensure uniqueness for subbox regions per image/parent to prevent duplicate python_subbox inserts
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'uq_image_parent_subbox_region'
+  ) THEN
+    CREATE UNIQUE INDEX uq_image_parent_subbox_region ON image_annotations (image_id, parent_annotation_id, subbox_region) WHERE subbox_region IS NOT NULL;
+  END IF;
+END$$;
+
+-- Backfill: populate predicted_plaque from existing plaque_status where safe, then default plaque_status to 0 for python_subbox rows that are unannotated
+BEGIN;
+  -- 1) Copy existing plaque_status into predicted_plaque for python_subbox rows where plaque_status exists and not annotated by clinician
+  UPDATE image_annotations
+  SET predicted_plaque = plaque_status
+  WHERE source_type = 'python_subbox' AND predicted_plaque IS NULL AND plaque_status IS NOT NULL AND annotated_by IS NULL;
+
+  -- 2) For python_subbox rows that are not clinician annotated, reset plaque_status to 0 (no plaque)
+  UPDATE image_annotations
+  SET plaque_status = 0
+  WHERE source_type = 'python_subbox' AND annotated_by IS NULL;
+COMMIT;
+
+
 
 COMMENT ON TABLE image_annotations IS 'Stores original COCO annotations and processed subbox annotations';
 COMMENT ON COLUMN image_annotations.coco_image_id IS 'Original image ID from COCO JSON file';

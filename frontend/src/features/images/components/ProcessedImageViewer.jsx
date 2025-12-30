@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react';
-import { useAuth } from '../../auth/hooks/useAuth';
 import Button from '../../../components/ui/Button';
 import LoadingSpinner from '../../../components/ui/LoadingSpinner';
 import { FiUpload, FiX, FiZoomIn, FiChevronLeft, FiChevronRight } from 'react-icons/fi';
@@ -21,7 +20,10 @@ const ProcessedImageViewer = ({
   const [lightboxImage, setLightboxImage] = useState(null); // { url, label, position, stainedUrl, imageId, image }
   const [annotations, setAnnotations] = useState([]); // teeth array with subboxes
   const [annotationStats, setAnnotationStats] = useState(null);
-  const { user: currentUser } = useAuth();
+  const [currentUser] = useState(() => {
+    const userData = localStorage.getItem('user');
+    return userData ? JSON.parse(userData) : null;
+  });
 
   const hasProcessed = processedImages.some(img => img.url_processed);
   
@@ -138,15 +140,8 @@ const ProcessedImageViewer = ({
     }
 
     try {
-      // Toggle: null -> 1 -> 0 -> 1 ...
-      let newStatus;
-      if (subbox.plaque_status === null) {
-        newStatus = 1; // First click: mark as has plaque
-      } else if (subbox.plaque_status === 1) {
-        newStatus = 0; // Second click: mark as no plaque
-      } else {
-        newStatus = 1; // Third click: back to has plaque
-      }
+      // Toggle: flip between 0 and 1 (no plaque <-> has plaque)
+      const newStatus = subbox.plaque_status === 1 ? 0 : 1;
 
       console.log(`⚡ Updating subbox ${subbox.subbox_id} from ${subbox.plaque_status} to ${newStatus}`);
       
