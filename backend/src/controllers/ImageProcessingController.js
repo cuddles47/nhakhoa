@@ -339,55 +339,70 @@ class ImageProcessingController {
     
     console.log(`Parsed ${teeth.length} teeth and ${subboxes.length} subboxes from YOLO`);
     
-    // Map: YOLO tooth position → DB tooth id
-    const toothIdMap = {};
+    // Map: YOLO tooth CLASS ID (as produced by Python service) → DB tooth id
+    // Note: Python uses the original tooth class as `tooth_id` field in 6-field format.
+    const toothClassIdMap = {};
     for (let i = 0; i < Math.min(teeth.length, dbTeeth.length); i++) {
-      toothIdMap[i] = dbTeeth[i].id;
-      console.log(`📍 Map YOLO tooth position ${i} → DB tooth id ${dbTeeth[i].id}`);
+      const cls = teeth[i].classId;
+      toothClassIdMap[cls] = dbTeeth[i].id;
+      console.log(`📍 Map YOLO tooth class ${cls} (pos ${i}) → DB tooth id ${dbTeeth[i].id}`);
     }
     
-    // Create subboxes
+    // For diagnostics, show expected subbox counts per tooth (from annotations)
+    const expectedSubboxCounts = {};
+    for (const sb of subboxes) {
+      expectedSubboxCounts[sb.toothId] = (expectedSubboxCounts[sb.toothId] || 0) + 1;
+    }
+    console.log('ℹ️ Expected subboxes per toothId from file:', expectedSubboxCounts);
+    
+    // Assign regionNames sequentially for each toothId
     let subboxCount = 0;
     const regionNames = ['top_left', 'top_right', 'bottom_left', 'bottom_right'];
-    
+    const regionIndexMap = {};
     for (const subbox of subboxes) {
-      const parentId = toothIdMap[subbox.toothId];
+      const parentId = toothClassIdMap[subbox.toothId];
       if (!parentId) {
-        console.log(`⚠️ Skipping subbox with invalid tooth_id=${subbox.toothId}`);
+        console.log(`⚠️ Skipping subbox with invalid tooth_id=${subbox.toothId} (no mapping to DB tooth)`);
         continue;
       }
-      
-      // Determine region based on count (4 subboxes per tooth in order)
-      const subboxesForThisTooth = subboxes.filter(s => s.toothId === subbox.toothId);
-      const indexInTooth = subboxesForThisTooth.indexOf(subbox);
-      const region = regionNames[indexInTooth % 4];
-      
+      console.log(`🔗 Subbox toothId ${subbox.toothId} → parent DB id ${parentId}`);
+      // Assign region sequentially for each toothId
+      if (!(subbox.toothId in regionIndexMap)) regionIndexMap[subbox.toothId] = 0;
+      const region = regionNames[regionIndexMap[subbox.toothId] % 4];
+      regionIndexMap[subbox.toothId]++;
       const bbox = [subbox.x, subbox.y, subbox.w, subbox.h];
       const area = subbox.w * subbox.h;
-      const plaqueStatus = subbox.classId === 1 ? 1 : 0;
-      
+      const plaqueStatus = subbox.classId === 1 ? 1 : 0; // 1 = plaque, 0 = no plaque
       await pool.query(`
-        INSERT INTO image_annotations 
-        (image_id, coco_image_id, category_id, category_name, bbox, area, parent_annotation_id, subbox_region, source_type, plaque_status)
-        VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, 'python_subbox', $9)
-        ON CONFLICT DO NOTHING
+        INSERT INTO image_annotations (image_id, coco_image_id, category_id, category_name, bbox, area, parent_annotation_id, subbox_region, source_type, plaque_status)
+        SELECT $1, $2, $3, $4::varchar(50), $5::jsonb, $6, $7, $8::varchar(20), 'python_subbox', $9
+        WHERE NOT EXISTS (
+          SELECT 1 FROM image_annotations WHERE image_id = $1 AND parent_annotation_id = $7 AND subbox_region = $8::varchar(20)
+        )
       `, [
-        imageId, 
+        imageId,
         dbTeeth.find(t => t.id === parentId).coco_image_id,
         subbox.classId,  // 0 or 1 (plaque label)
-        region, 
-        JSON.stringify(bbox), 
-        area, 
-        parentId, 
+        region,
+        JSON.stringify(bbox),
+        area,
+        parentId,
         region,
         plaqueStatus
       ]);
-      
       subboxCount++;
       console.log(`✅ Created subbox: parent=${parentId}, region=${region}, status=${plaqueStatus}`);
     }
-    
     console.log(`Completed: created ${subboxCount} subboxes for image ${imageId}`);
+
+    // Diagnostics: compare expected vs created per toothId
+    const actualSubboxCounts = {};
+    for (const sb of subboxes) {
+      if (!toothClassIdMap[sb.toothId]) continue;
+      actualSubboxCounts[sb.toothId] = (actualSubboxCounts[sb.toothId] || 0) + 1;
+    }
+    console.log('ℹ️ Expected subboxes per toothId:', expectedSubboxCounts);
+    console.log('ℹ️ Created (actual) subboxes per toothId:', actualSubboxCounts);
   }
 }
 
@@ -395,5 +410,7 @@ const controller = new ImageProcessingController();
 
 module.exports = {
   processRawImages: controller.processRawImages.bind(controller),
-  getProcessingStatus: controller.getProcessingStatus.bind(controller)
+  getProcessingStatus: controller.getProcessingStatus.bind(controller),
+  // Expose controller for internal tests and scripts
+  _controller: controller
 };
