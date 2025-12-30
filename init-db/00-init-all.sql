@@ -158,6 +158,9 @@ CREATE TABLE IF NOT EXISTS image_annotations (
     source_type VARCHAR(30) DEFAULT 'doctor_upload', -- 'doctor_upload' or 'python_processed' or 'python_subbox'
     parent_annotation_id INTEGER REFERENCES image_annotations(id) ON DELETE SET NULL, -- For subboxes, links to parent tooth annotation
     subbox_region VARCHAR(20), -- For subboxes: 'gingival', 'incisal', 'mesial', 'distal'
+    plaque_status INTEGER DEFAULT NULL, -- 0 = no plaque, 1 = has plaque, NULL = not annotated yet
+    annotated_by INTEGER REFERENCES users(id) ON DELETE SET NULL, -- Doctor who made the annotation
+    annotated_at TIMESTAMP DEFAULT NULL, -- When the plaque annotation was made
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -168,6 +171,23 @@ COMMENT ON COLUMN image_annotations.category_name IS 'Tooth number (11-44) or Br
 COMMENT ON COLUMN image_annotations.source_type IS 'Origin: doctor_upload (from bulk upload), python_processed (refined by Python), python_subbox (4-corner divisions)';
 COMMENT ON COLUMN image_annotations.parent_annotation_id IS 'For subboxes, references the parent tooth annotation';
 COMMENT ON COLUMN image_annotations.subbox_region IS 'For subboxes: gingival, incisal, mesial, distal';
+COMMENT ON COLUMN image_annotations.plaque_status IS '0 = no plaque, 1 = has plaque, NULL = not annotated yet';
+COMMENT ON COLUMN image_annotations.annotated_by IS 'User ID of doctor who made the plaque annotation';
+COMMENT ON COLUMN image_annotations.annotated_at IS 'Timestamp when plaque status was annotated';
+
+-- Tạo bảng lịch sử annotation (audit trail)
+CREATE TABLE IF NOT EXISTS annotation_history (
+    id SERIAL PRIMARY KEY,
+    annotation_id INTEGER REFERENCES image_annotations(id) ON DELETE CASCADE,
+    user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    old_value INTEGER,
+    new_value INTEGER,
+    changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+COMMENT ON TABLE annotation_history IS 'Audit trail for plaque status changes';
+COMMENT ON COLUMN annotation_history.old_value IS 'Previous plaque status value (0, 1, or NULL)';
+COMMENT ON COLUMN annotation_history.new_value IS 'New plaque status value (0, 1, or NULL)';
 
 -- =====================================================
 -- INDEXES
@@ -195,6 +215,10 @@ CREATE INDEX IF NOT EXISTS idx_image_annotations_image_id ON image_annotations(i
 CREATE INDEX IF NOT EXISTS idx_image_annotations_coco_image_id ON image_annotations(coco_image_id);
 CREATE INDEX IF NOT EXISTS idx_image_annotations_source_type ON image_annotations(source_type);
 CREATE INDEX IF NOT EXISTS idx_image_annotations_parent_id ON image_annotations(parent_annotation_id) WHERE parent_annotation_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_image_annotations_plaque_status ON image_annotations(plaque_status) WHERE plaque_status IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_image_annotations_annotated_by ON image_annotations(annotated_by);
+CREATE INDEX IF NOT EXISTS idx_annotation_history_annotation_id ON annotation_history(annotation_id);
+CREATE INDEX IF NOT EXISTS idx_annotation_history_user_id ON annotation_history(user_id);
 
 -- Composite indexes for common query patterns
 CREATE INDEX IF NOT EXISTS idx_visits_status_date ON visits(status, visit_date) WHERE deleted_at IS NULL;

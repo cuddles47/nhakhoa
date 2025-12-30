@@ -7,6 +7,7 @@ const visitController = require('../controllers/VisitController');
 const imageController = require('../controllers/ImageController');
 const bulkUploadController = require('../controllers/BulkUploadController');
 const imageProcessingController = require('../controllers/ImageProcessingController');
+const annotationController = require('../controllers/AnnotationController');
 const indexController = require('../controllers/index');
 const validate = require('../middleware/validate');
 const patientSchemas = require('../validators/patientValidator');
@@ -73,6 +74,12 @@ router.get('/api/bulk-upload/history', bulkUploadController.getUploadHistory);
 // Image processing routes
 router.post('/api/visits/:visitId/process-images', imageProcessingController.processRawImages);
 router.get('/api/visits/:visitId/processing-status', imageProcessingController.getProcessingStatus);
+
+// Annotation routes
+router.get('/api/images/:imageId/annotations', annotationController.getImageAnnotations);
+router.put('/api/annotations/:annotationId/plaque', annotationController.updatePlaqueStatus);
+router.post('/api/images/:imageId/annotations/batch', annotationController.batchUpdateAnnotations);
+router.get('/api/visits/:visitId/annotations/stats', annotationController.getVisitStats);
 
 // Proxy route for MinIO images (to avoid CORS issues)
 router.get('/api/images/proxy/*', async (req, res) => {

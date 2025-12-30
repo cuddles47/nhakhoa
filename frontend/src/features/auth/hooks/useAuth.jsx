@@ -1,8 +1,8 @@
 import { useState, useEffect, createContext, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
-import authService from '../../services/authService';
-import { AUTH_TOKEN_KEY, AUTH_USER_KEY } from '../../constants';
+import authService from '../../../services/authService';
+import { AUTH_TOKEN_KEY, AUTH_USER_KEY } from '../../../constants';
 
 const AuthContext = createContext(null);
 

@@ -1,7 +1,10 @@
 import { useState, useEffect } from 'react';
+import { useAuth } from '../../auth/hooks/useAuth';
 import Button from '../../../components/ui/Button';
 import LoadingSpinner from '../../../components/ui/LoadingSpinner';
-import { FiUpload, FiX } from 'react-icons/fi';
+import { FiUpload, FiX, FiZoomIn, FiChevronLeft, FiChevronRight } from 'react-icons/fi';
+import AnnotationCanvas from '../../../components/AnnotationCanvas';
+import annotationService from '../../../services/annotationService';
 
 const ProcessedImageViewer = ({ 
   visitId, 
@@ -15,7 +18,10 @@ const ProcessedImageViewer = ({
   const [viewMode, setViewMode] = useState('raw'); // 'raw' or 'processed'
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState(null);
-  const [lightboxImage, setLightboxImage] = useState(null); // { url, label, position, stainedUrl }
+  const [lightboxImage, setLightboxImage] = useState(null); // { url, label, position, stainedUrl, imageId, image }
+  const [annotations, setAnnotations] = useState([]); // teeth array with subboxes
+  const [annotationStats, setAnnotationStats] = useState(null);
+  const { user: currentUser } = useAuth();
 
   const hasProcessed = processedImages.some(img => img.url_processed);
   
@@ -93,6 +99,149 @@ const ProcessedImageViewer = ({
       setProcessing(false);
     }
   };
+
+  // Load annotations for an image
+  const loadAnnotationsForImage = async (imageId) => {
+    try {
+      console.log('🔍 Loading annotations for image:', imageId);
+      const result = await annotationService.getImageAnnotations(imageId);
+      console.log('✅ Annotations loaded:', result);
+      console.log('📊 Teeth count:', result.data?.teeth?.length);
+      console.log('📊 Progress:', result.data?.progress);
+      setAnnotations(result.data?.teeth || []);
+      // Ensure percentage is a number
+      const progress = result.data?.progress;
+      if (progress && typeof progress === 'object') {
+        setAnnotationStats({
+          ...progress,
+          percentage: parseFloat(progress.percentage) || 0
+        });
+      } else {
+        setAnnotationStats(null);
+      }
+    } catch (err) {
+      console.error('❌ Failed to load annotations:', err);
+      setAnnotations([]);
+      setAnnotationStats(null);
+    }
+  };
+
+  // Handle subbox click to toggle plaque status
+  const handleSubboxClick = async (subbox, tooth) => {
+    console.log('🖱️ Subbox clicked:', subbox);
+    console.log('👤 Current user:', currentUser);
+    
+    if (!currentUser) {
+      console.error('❌ No user logged in');
+      alert('Vui lòng đăng nhập để sử dụng tính năng annotation');
+      return;
+    }
+
+    try {
+      // Toggle: null -> 1 -> 0 -> 1 ...
+      let newStatus;
+      if (subbox.plaque_status === null) {
+        newStatus = 1; // First click: mark as has plaque
+      } else if (subbox.plaque_status === 1) {
+        newStatus = 0; // Second click: mark as no plaque
+      } else {
+        newStatus = 1; // Third click: back to has plaque
+      }
+
+      console.log(`⚡ Updating subbox ${subbox.subbox_id} from ${subbox.plaque_status} to ${newStatus}`);
+      
+      await annotationService.updatePlaqueStatus(
+        subbox.subbox_id, 
+        newStatus, 
+        currentUser.id
+      );
+
+      console.log('✅ Update successful, reloading annotations...');
+      
+      // Reload annotations to reflect change
+      if (lightboxImage?.imageId) {
+        await loadAnnotationsForImage(lightboxImage.imageId);
+      }
+    } catch (err) {
+      console.error('❌ Failed to update plaque status:', err);
+      alert('Có lỗi xảy ra khi cập nhật: ' + err.message);
+    }
+  };
+
+  // Navigate between images in lightbox
+  const navigateImage = (direction) => {
+    if (!lightboxImage) return;
+    
+    const positions = [
+      { index: 1, type: 'top_right', label: 'Top Right', altTypes: [] },
+      { index: 2, type: 'top_center', label: 'Top Center', altTypes: ['top_middle'] },
+      { index: 3, type: 'top_left', label: 'Top Left', altTypes: [] },
+      { index: 4, type: 'central_right', label: 'Central Right', altTypes: [] },
+      { index: 5, type: 'central_middle', label: 'Central Middle', altTypes: [] },
+      { index: 6, type: 'central_left', label: 'Central Left', altTypes: [] },
+      { index: 7, type: 'bottom_right', label: 'Bottom Right', altTypes: [] },
+      { index: 8, type: 'bottom_center', label: 'Bottom Center', altTypes: ['bottom_middle'] },
+      { index: 9, type: 'bottom_left', label: 'Bottom Left', altTypes: [] }
+    ];
+
+    const currentIndex = positions.findIndex(p => p.index === lightboxImage.position.index);
+    let nextIndex = currentIndex + direction;
+    
+    // Wrap around
+    if (nextIndex < 0) nextIndex = positions.length - 1;
+    if (nextIndex >= positions.length) nextIndex = 0;
+    
+    const nextPosition = positions[nextIndex];
+    
+    // Find next image
+    const nextImage = displayImages.find(img => {
+      if (img.image_index === nextPosition.index) return true;
+      const imgType = img.image_type?.toLowerCase() || '';
+      const posType = nextPosition.type.toLowerCase();
+      if (imgType.includes(posType)) return true;
+      if (nextPosition.altTypes) {
+        return nextPosition.altTypes.some(alt => imgType.includes(alt.toLowerCase()));
+      }
+      return false;
+    });
+
+    if (nextImage) {
+      const imageUrl = viewMode === 'processed' && nextImage.url_processed
+        ? nextImage.url_processed
+        : nextImage.url;
+      const stainedImage = findStainedImage(nextPosition);
+      
+      setLightboxImage({
+        url: imageUrl,
+        label: nextPosition.label,
+        position: nextPosition,
+        stainedUrl: stainedImage?.url,
+        imageId: nextImage.id,
+        image: nextImage
+      });
+
+      // Load annotations for new image
+      if (nextImage.id) {
+        loadAnnotationsForImage(nextImage.id);
+      }
+    }
+  };
+
+  // Keyboard navigation
+  useEffect(() => {
+    const handleKeyPress = (e) => {
+      if (!lightboxImage) return;
+      
+      if (e.key === 'ArrowLeft') {
+        navigateImage(-1);
+      } else if (e.key === 'ArrowRight') {
+        navigateImage(1);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyPress);
+    return () => window.removeEventListener('keydown', handleKeyPress);
+  }, [lightboxImage]);
 
   const renderGrid = () => {
     const positions = [
@@ -181,8 +330,14 @@ const ProcessedImageViewer = ({
                       url: imageUrl, 
                       label: pos.label,
                       position: pos,
-                      stainedUrl: stainedImage?.url
+                      stainedUrl: stainedImage?.url,
+                      imageId: image?.id,
+                      image: image
                     });
+                    // Load annotations for this image
+                    if (image?.id) {
+                      loadAnnotationsForImage(image.id);
+                    }
                   }}
                   onError={(e) => {
                     e.target.style.display = 'none';
@@ -336,6 +491,122 @@ const ProcessedImageViewer = ({
             {lightboxImage.label}
           </div>
 
+          {/* Annotation Stats */}
+          {viewMode === 'processed' && annotationStats && typeof annotationStats === 'object' && (
+            <div style={{
+              position: 'absolute',
+              top: '20px',
+              left: '20px',
+              background: 'rgba(0, 0, 0, 0.8)',
+              backdropFilter: 'blur(10px)',
+              color: 'white',
+              padding: '12px 16px',
+              borderRadius: '12px',
+              fontSize: '12px',
+              zIndex: 10000,
+              minWidth: '200px'
+            }}>
+              <div style={{ fontWeight: '600', marginBottom: '8px', fontSize: '13px' }}>
+                📊 Annotation Progress
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#94a3b8' }}>Total subboxes:</span>
+                  <span style={{ fontWeight: '600' }}>{annotationStats.total}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#94a3b8' }}>Annotated:</span>
+                  <span style={{ fontWeight: '600', color: '#10b981' }}>{annotationStats.annotated}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#94a3b8' }}>Has plaque:</span>
+                  <span style={{ fontWeight: '600', color: '#ef4444' }}>{annotationStats.plaque_detected}</span>
+                </div>
+                <div style={{ 
+                  marginTop: '8px', 
+                  paddingTop: '8px', 
+                  borderTop: '1px solid rgba(255,255,255,0.2)',
+                  fontWeight: '600'
+                }}>
+                  {Number(annotationStats.percentage || 0).toFixed(1)}% complete
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Navigation Buttons */}
+          <button
+            style={{
+              position: 'absolute',
+              top: '50%',
+              left: '20px',
+              transform: 'translateY(-50%)',
+              background: 'rgba(255, 255, 255, 0.2)',
+              backdropFilter: 'blur(10px)',
+              border: 'none',
+              color: 'white',
+              width: '48px',
+              height: '48px',
+              borderRadius: '50%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+              zIndex: 10000
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              navigateImage(-1);
+            }}
+            onMouseEnter={(e) => {
+              e.target.style.background = 'rgba(255, 255, 255, 0.3)';
+              e.target.style.transform = 'translateY(-50%) scale(1.1)';
+            }}
+            onMouseLeave={(e) => {
+              e.target.style.background = 'rgba(255, 255, 255, 0.2)';
+              e.target.style.transform = 'translateY(-50%) scale(1)';
+            }}
+          >
+            <FiChevronLeft size={28} />
+          </button>
+
+          <button
+            style={{
+              position: 'absolute',
+              top: '50%',
+              right: '20px',
+              transform: 'translateY(-50%)',
+              background: 'rgba(255, 255, 255, 0.2)',
+              backdropFilter: 'blur(10px)',
+              border: 'none',
+              color: 'white',
+              width: '48px',
+              height: '48px',
+              borderRadius: '50%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+              zIndex: 10000
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              navigateImage(1);
+            }}
+            onMouseEnter={(e) => {
+              e.target.style.background = 'rgba(255, 255, 255, 0.3)';
+              e.target.style.transform = 'translateY(-50%) scale(1.1)';
+            }}
+            onMouseLeave={(e) => {
+              e.target.style.background = 'rgba(255, 255, 255, 0.2)';
+              e.target.style.transform = 'translateY(-50%) scale(1)';
+            }}
+          >
+            <FiChevronRight size={28} />
+          </button>
+
           {/* Split Screen Container */}
           <div style={{
             flex: 1,
@@ -346,7 +617,7 @@ const ProcessedImageViewer = ({
             marginTop: '60px',
             marginBottom: '40px'
           }}>
-            {/* Left: Raw/Processed */}
+            {/* Left: Raw/Processed với annotation overlay */}
             <div style={{
               flex: 1,
               height: '100%',
@@ -365,20 +636,38 @@ const ProcessedImageViewer = ({
                 fontWeight: '600',
                 marginBottom: '12px'
               }}>
-                {viewMode === 'processed' ? ' Processed' : ' Raw'}
+                {viewMode === 'processed' ? '🔍 Processed' : '📷 Raw'}
               </div>
-              <img 
-                src={lightboxImage.url}
-                alt={lightboxImage.label}
-                style={{
-                  maxWidth: '100%',
-                  maxHeight: '100%',
-                  objectFit: 'contain',
-                  borderRadius: '8px',
-                  boxShadow: '0 20px 60px rgba(0, 0, 0, 0.5)'
-                }}
-                onClick={(e) => e.stopPropagation()}
-              />
+              {(() => {
+                const shouldShowCanvas = viewMode === 'processed' && annotations.length > 0;
+                console.log('🎬 Render decision:', { 
+                  viewMode, 
+                  annotationsLength: annotations.length,
+                  shouldShowCanvas,
+                  lightboxImageId: lightboxImage?.imageId
+                });
+                
+                return shouldShowCanvas ? (
+                  <AnnotationCanvas
+                    imageUrl={lightboxImage.url}
+                    teeth={annotations}
+                    onSubboxClick={handleSubboxClick}
+                  />
+                ) : (
+                  <img 
+                    src={lightboxImage.url}
+                    alt={lightboxImage.label}
+                    style={{
+                      maxWidth: '100%',
+                      maxHeight: '100%',
+                      objectFit: 'contain',
+                      borderRadius: '8px',
+                      boxShadow: '0 20px 60px rgba(0, 0, 0, 0.5)'
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                );
+              })()}
             </div>
 
             {/* Divider */}

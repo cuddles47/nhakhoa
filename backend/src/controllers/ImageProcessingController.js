@@ -112,11 +112,21 @@ class ImageProcessingController {
       zip.extractAllTo(tempDir, true);
 
       const processedImagesPath = path.join(tempDir, 'images');
+      const processedAnnotationsPath = path.join(tempDir, 'annotations');
       const processedFiles = await fs.readdir(processedImagesPath);
       
       console.log(`Found ${processedFiles.length} processed files`);
       
+      // Check if annotations folder exists
+      try {
+        const annotationFiles = await fs.readdir(processedAnnotationsPath);
+        console.log(`✅ Found annotations folder with ${annotationFiles.length} files:`, annotationFiles);
+      } catch (err) {
+        console.error('❌ No annotations folder found in ZIP:', err.message);
+      }
+      
       const updatePromises = [];
+      const annotationPromises = [];
       
       for (const file of processedFiles) {
         console.log(`Processing file: ${file}`);
@@ -168,9 +178,29 @@ class ImageProcessingController {
             processed_at: new Date()
           })
         );
+
+        // Parse and save subbox annotations
+        const annotationFile = `image_${imageId}.txt`;
+        const annotationPath = path.join(processedAnnotationsPath, annotationFile);
+        
+        try {
+          const annotationContent = await fs.readFile(annotationPath, 'utf-8');
+          console.log(`✅ Found annotation file for image ${imageId}, content length: ${annotationContent.length}`);
+          
+          // Call method directly with await instead of pushing promise
+          const parsePromise = this._parseAndSaveSubboxes(imageId, annotationContent, originalImage.width, originalImage.height);
+          annotationPromises.push(parsePromise);
+        } catch (annError) {
+          console.error(`❌ Failed to read annotations for image ${imageId}:`, annError.message);
+          console.error(`    Tried path: ${annotationPath}`);
+        }
       }
 
       await Promise.all(updatePromises);
+      console.log(`Waiting for ${annotationPromises.length} annotation parse operations...`);
+      await Promise.all(annotationPromises);
+      console.log('All annotations parsed and saved');
+      
       await fs.rm(tempDir, { recursive: true, force: true });
 
       const updatedImages = await Image.findByVisitId(visitId);
@@ -252,6 +282,118 @@ class ImageProcessingController {
       });
     }
   }
+
+  /**
+   * Parse YOLO annotations and save subboxes to database
+   * @param {number} imageId - Image ID
+   * @param {string} annotationContent - YOLO format annotation content
+   * @param {number} imageWidth - Image width in pixels
+   * @param {number} imageHeight - Image height in pixels
+   */
+  async _parseAndSaveSubboxes(imageId, annotationContent, imageWidth, imageHeight) {
+    const pool = require('../config/database');
+    const lines = annotationContent.trim().split('\n').filter(line => line.trim());
+    
+    console.log(`Parsing ${lines.length} annotations for image ${imageId}`);
+    
+    // Get all parent teeth from database (sorted by id for consistent ordering)
+    const teethResult = await pool.query(`
+      SELECT id, category_id, bbox, coco_image_id 
+      FROM image_annotations 
+      WHERE image_id = $1 AND parent_annotation_id IS NULL
+      ORDER BY id
+    `, [imageId]);
+    
+    const dbTeeth = teethResult.rows;
+    console.log(`Found ${dbTeeth.length} parent teeth in DB`);
+    
+    // Parse annotations - 6 fields = subbox, 5 fields = tooth
+    const teeth = [];
+    const subboxes = [];
+    
+    for (const line of lines) {
+      const parts = line.trim().split(/\s+/);
+      if (parts.length < 5) continue;
+      
+      const classId = parseInt(parts[0]);
+      const xCenter = parseFloat(parts[1]);
+      const yCenter = parseFloat(parts[2]);
+      const width = parseFloat(parts[3]);
+      const height = parseFloat(parts[4]);
+      const toothId = parts.length === 6 ? parseInt(parts[5]) : null;
+      
+      // Convert YOLO to pixel coordinates
+      const x = Math.round((xCenter - width / 2) * imageWidth);
+      const y = Math.round((yCenter - height / 2) * imageHeight);
+      const w = Math.round(width * imageWidth);
+      const h = Math.round(height * imageHeight);
+      
+      if (toothId !== null) {
+        // 6 fields = subbox with parent tooth_id
+        subboxes.push({ classId, x, y, w, h, toothId });
+      } else {
+        // 5 fields = parent tooth
+        teeth.push({ classId, x, y, w, h });
+      }
+    }
+    
+    console.log(`Parsed ${teeth.length} teeth and ${subboxes.length} subboxes from YOLO`);
+    
+    // Map: YOLO tooth position → DB tooth id
+    const toothIdMap = {};
+    for (let i = 0; i < Math.min(teeth.length, dbTeeth.length); i++) {
+      toothIdMap[i] = dbTeeth[i].id;
+      console.log(`📍 Map YOLO tooth position ${i} → DB tooth id ${dbTeeth[i].id}`);
+    }
+    
+    // Create subboxes
+    let subboxCount = 0;
+    const regionNames = ['top_left', 'top_right', 'bottom_left', 'bottom_right'];
+    
+    for (const subbox of subboxes) {
+      const parentId = toothIdMap[subbox.toothId];
+      if (!parentId) {
+        console.log(`⚠️ Skipping subbox with invalid tooth_id=${subbox.toothId}`);
+        continue;
+      }
+      
+      // Determine region based on count (4 subboxes per tooth in order)
+      const subboxesForThisTooth = subboxes.filter(s => s.toothId === subbox.toothId);
+      const indexInTooth = subboxesForThisTooth.indexOf(subbox);
+      const region = regionNames[indexInTooth % 4];
+      
+      const bbox = [subbox.x, subbox.y, subbox.w, subbox.h];
+      const area = subbox.w * subbox.h;
+      const plaqueStatus = subbox.classId === 1 ? 1 : 0;
+      
+      await pool.query(`
+        INSERT INTO image_annotations 
+        (image_id, coco_image_id, category_id, category_name, bbox, area, parent_annotation_id, subbox_region, source_type, plaque_status)
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, 'python_subbox', $9)
+        ON CONFLICT DO NOTHING
+      `, [
+        imageId, 
+        dbTeeth.find(t => t.id === parentId).coco_image_id,
+        subbox.classId,  // 0 or 1 (plaque label)
+        region, 
+        JSON.stringify(bbox), 
+        area, 
+        parentId, 
+        region,
+        plaqueStatus
+      ]);
+      
+      subboxCount++;
+      console.log(`✅ Created subbox: parent=${parentId}, region=${region}, status=${plaqueStatus}`);
+    }
+    
+    console.log(`Completed: created ${subboxCount} subboxes for image ${imageId}`);
+  }
 }
 
-module.exports = new ImageProcessingController();
+const controller = new ImageProcessingController();
+
+module.exports = {
+  processRawImages: controller.processRawImages.bind(controller),
+  getProcessingStatus: controller.getProcessingStatus.bind(controller)
+};

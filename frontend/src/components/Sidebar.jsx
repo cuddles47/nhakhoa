@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import { FiUsers, FiUploadCloud, FiMenu, FiX, FiChevronLeft, FiChevronRight, FiUser, FiLogOut } from 'react-icons/fi'
+import { useAuth } from '../features/auth/hooks/useAuth';
 import { MdOutlineHealthAndSafety } from 'react-icons/md'
 
 function Sidebar({ onLogout }) {
@@ -98,7 +99,7 @@ function Sidebar({ onLogout }) {
                 <FiUser size={20} />
               </div>
               <div className="user-details">
-                <p className="user-name">{localStorage.getItem('username') || 'Admin'}</p>
+                <p className="user-name">{useAuth().user?.username || 'Admin'}</p>
                 <p className="user-role">Quản trị viên</p>
               </div>
               <button 

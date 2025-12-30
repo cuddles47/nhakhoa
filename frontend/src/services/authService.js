@@ -9,7 +9,7 @@ class AuthService {
    * Login with username and password
    */
   async login(credentials) {
-    const response = await apiClient.post('/auth/login', credentials);
+    const response = await apiClient.post('/api/auth/login', credentials);
     return response.data;
   }
 
