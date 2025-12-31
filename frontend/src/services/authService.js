@@ -24,7 +24,13 @@ class AuthService {
   /**
    * Logout user
    */
-  logout() {
+  async logout() {
+    try {
+      // Call server to clear cookie
+      await apiClient.post('/api/auth/logout');
+    } catch (err) {
+      console.warn('Logout request failed:', err?.message || err);
+    }
     // Clear local storage on logout
     localStorage.clear();
   }

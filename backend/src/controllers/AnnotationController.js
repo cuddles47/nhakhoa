@@ -115,8 +115,7 @@ class AnnotationController {
             total: totalSubboxes,
             annotated: annotatedSubboxes,
             not_annotated: totalSubboxes - annotatedSubboxes,
-            plaque_detected: plaqueDetected,
-            percentage: totalSubboxes > 0 ? ((annotatedSubboxes / totalSubboxes) * 100).toFixed(1) : 0
+            plaque_detected: plaqueDetected
           }
         }
       });

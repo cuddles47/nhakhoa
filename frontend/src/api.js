@@ -5,7 +5,35 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
+  withCredentials: true,
 });
+
+// Interceptor: tự động gọi refresh khi access token hết hạn
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const originalRequest = error.config;
+    if (error.response && error.response.status === 401 && !originalRequest._retry) {
+      originalRequest._retry = true;
+      try {
+        // Gọi refresh token
+        const res = await api.post('/auth/refresh');
+        const newAccessToken = res.data.accessToken;
+        if (newAccessToken) {
+          // Lưu access token mới vào localStorage
+          localStorage.setItem('accessToken', newAccessToken);
+          // Gắn lại Authorization header và retry request
+          originalRequest.headers['Authorization'] = `Bearer ${newAccessToken}`;
+          return api(originalRequest);
+        }
+      } catch (refreshError) {
+        // Nếu refresh token cũng hết hạn, chuyển về trang login
+        window.location.href = '/login';
+      }
+    }
+    return Promise.reject(error);
+  }
+);
 
 // Auth
 export const login = (credentials) => api.post('/auth/login', credentials);

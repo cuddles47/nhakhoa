@@ -6,32 +6,50 @@ const jwt = require('jsonwebtoken');
  */
 const authenticate = (req, res, next) => {
     try {
-        // Get token from Authorization header
+        // Get access token from Authorization header
         const authHeader = req.headers.authorization;
-        
-        if (!authHeader || !authHeader.startsWith('Bearer ')) {
-            return res.status(401).json({
-                success: false,
-                message: 'Không tìm thấy token xác thực'
-            });
+        let accessToken = null;
+        if (authHeader && authHeader.startsWith('Bearer ')) {
+            accessToken = authHeader.substring(7);
         }
 
-        const token = authHeader.substring(7); // Remove 'Bearer ' prefix
+        // Try verify access token
+        if (accessToken) {
+            try {
+                const decoded = jwt.verify(accessToken, process.env.JWT_SECRET || 'your-secret-key');
+                req.user = decoded;
+                return next();
+            } catch (err) {
+                if (err.name !== 'TokenExpiredError') {
+                    return res.status(401).json({ success: false, message: 'Token không hợp lệ' });
+                }
+                // Nếu access token hết hạn, tiếp tục kiểm tra refresh token
+            }
+        }
 
-        // Verify token
-        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
-        
-        // Attach user info to request
-        req.user = decoded;
-        
-        next();
+        // Nếu không có access token hoặc access token hết hạn, kiểm tra refresh token
+        const refreshToken = req.cookies && req.cookies.refreshToken;
+        if (!refreshToken) {
+            return res.status(401).json({ success: false, message: 'Token đã hết hạn, vui lòng đăng nhập lại' });
+        }
+        // Verify refresh token
+        try {
+            const decodedRefresh = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET || 'your-refresh-secret-key');
+            // Tạo access token mới
+            const newAccessToken = jwt.sign(
+                { id: decodedRefresh.id },
+                process.env.JWT_SECRET || 'your-secret-key',
+                { expiresIn: '20m' }
+            );
+            // Gửi access token mới về frontend
+            res.setHeader('x-new-access-token', newAccessToken);
+            req.user = { id: decodedRefresh.id };
+            return next();
+        } catch (err) {
+            return res.status(401).json({ success: false, message: 'Refresh token hết hạn, vui lòng đăng nhập lại' });
+        }
     } catch (error) {
-        if (error.name === 'TokenExpiredError') {
-            return res.status(401).json({
-                success: false,
-                message: 'Token đã hết hạn'
-            });
-        }
+        return res.status(401).json({ success: false, message: 'Lỗi xác thực' });
         
         if (error.name === 'JsonWebTokenError') {
             return res.status(401).json({

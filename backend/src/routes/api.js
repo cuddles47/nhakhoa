@@ -30,7 +30,9 @@ router.get('/api/status', indexController.getStatus);
 
 // Auth routes
 router.post('/api/auth/login', authController.login);
+router.post('/api/auth/logout', authController.logout);
 router.get('/api/auth/profile', authController.getProfile);
+router.post('/api/auth/refresh', authController.refreshToken);
 
 // User routes
 router.get('/api/users', userController.getAllUsers);
