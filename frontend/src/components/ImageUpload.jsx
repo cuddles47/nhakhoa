@@ -4,6 +4,8 @@ import { getVisitById, getImagesByVisit, createImage, updateImageValidation } fr
 import { FiArrowLeft, FiImage, FiUpload, FiCheck, FiX, FiCheckCircle, FiXCircle } from 'react-icons/fi'
 import ProcessedImageViewer from '../features/images/components/ProcessedImageViewer'
 import imageService from '../services/imageService'
+import toast from 'react-hot-toast';
+
 
 function ImageUpload() {
   const { visitId } = useParams()
@@ -59,7 +61,7 @@ function ImageUpload() {
       const processedImagesData = rawImagesData.filter(img => img.url_processed)
       setProcessedImages(processedImagesData)
     } catch (err) {
-      console.error(err)
+      // ...existing code...
       setError('Không thể tải thông tin lần khám')
     } finally {
       setLoading(false)
@@ -96,22 +98,15 @@ function ImageUpload() {
       const processedImagesData = rawImagesData.filter(img => img.url_processed)
       setProcessedImages(processedImagesData)
       
-      console.log('Images reloaded with proxy URLs:', {
-        total: allImagesWithProxy.length,
-        raw: rawImagesData.length,
-        processed: processedImagesData.length,
-        sampleUrl: rawImagesData[0]?.url
-      })
+      // ...existing code...
     } catch (err) {
-      console.error(err)
+      // ...existing code...
     }
   }
 
   const handleProcessImages = async () => {
     try {
-      console.log('Starting image processing for visit:', visitId);
       const result = await imageService.processImages(visitId);
-      console.log('Processing result:', result);
       
       if (result.success) {
         setProcessedImages(result.data);
@@ -121,7 +116,7 @@ function ImageUpload() {
       
       return result;
     } catch (err) {
-      console.error('Error processing images:', err);
+      // ...existing code...
       throw new Error(err.response?.data?.error || 'Không thể xử lý ảnh');
     }
   }
@@ -150,8 +145,8 @@ function ImageUpload() {
         await createImage(formData)
         loadImages()
       } catch (err) {
-        alert('Không thể tạo ảnh: ' + (err.response?.data?.message || err.message))
-        console.error(err)
+        toast.error('Không thể tạo ảnh: ' + (err.response?.data?.message || err.message));
+        // ...existing code...
       }
     }
     
@@ -164,8 +159,8 @@ function ImageUpload() {
       await updateImageValidation(imageId, status)
       loadImages()
     } catch (err) {
-      alert('Không thể cập nhật trạng thái')
-      console.error(err)
+      toast.error('Không thể cập nhật trạng thái');
+      // ...existing code...
     }
   }
 

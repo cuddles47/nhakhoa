@@ -5,6 +5,7 @@ import LoadingSpinner from '../../../components/ui/LoadingSpinner';
 import { FiUpload, FiX, FiZoomIn, FiChevronLeft, FiChevronRight } from 'react-icons/fi';
 import AnnotationCanvas from '../../../components/AnnotationCanvas';
 import annotationService from '../../../services/annotationService';
+import { toast } from 'react-hot-toast';
 
 const ProcessedImageViewer = ({ 
   visitId, 
@@ -27,16 +28,7 @@ const ProcessedImageViewer = ({
   
   // Auto-switch to processed view after processing completes
   useEffect(() => {
-    console.log('ProcessedImageViewer useEffect:', {
-      hasProcessed,
-      processing,
-      viewMode,
-      processedImagesCount: processedImages.length,
-      rawImagesCount: rawImages.length
-    });
-    
     if (hasProcessed && processing) {
-      console.log('Auto-switching to processed view');
       setViewMode('processed');
       setProcessing(false);
     }
@@ -73,28 +65,17 @@ const ProcessedImageViewer = ({
     });
   };
   
-  console.log('ProcessedImageViewer render:', {
-    viewMode,
-    displayImagesCount: displayImages.length,
-    hasProcessed,
-    processing,
-    sampleImage: displayImages[0]
-  });
+  // ...existing code...
 
   const handleProcessClick = async () => {
-    console.log('=== PROCESS BUTTON CLICKED ===');
-    console.log('Visit ID:', visitId);
-    console.log('Raw images count:', rawImages.length);
+    // ...existing code...
     
     setProcessing(true);
     setError(null);
     
     try {
-      console.log('Calling onProcessClick...');
       const result = await onProcessClick();
-      console.log('onProcessClick result:', result);
     } catch (err) {
-      console.error('Process error:', err);
       setError(err.message || 'Có lỗi xảy ra khi xử lý ảnh');
       setProcessing(false);
     }
@@ -103,11 +84,7 @@ const ProcessedImageViewer = ({
   // Load annotations for an image
   const loadAnnotationsForImage = async (imageId) => {
     try {
-      console.log('🔍 Loading annotations for image:', imageId);
       const result = await annotationService.getImageAnnotations(imageId);
-      console.log('✅ Annotations loaded:', result);
-      console.log('📊 Teeth count:', result.data?.teeth?.length);
-      console.log('📊 Progress:', result.data?.progress);
       setAnnotations(result.data?.teeth || []);
       // Ensure percentage is a number
       const progress = result.data?.progress;
@@ -120,7 +97,6 @@ const ProcessedImageViewer = ({
         setAnnotationStats(null);
       }
     } catch (err) {
-      console.error('❌ Failed to load annotations:', err);
       setAnnotations([]);
       setAnnotationStats(null);
     }
@@ -128,12 +104,10 @@ const ProcessedImageViewer = ({
 
   // Handle subbox click to toggle plaque status
   const handleSubboxClick = async (subbox, tooth) => {
-    console.log('🖱️ Subbox clicked:', subbox);
-    console.log('👤 Current user:', currentUser);
+    // ...existing code...
     
     if (!currentUser) {
-      console.error('❌ No user logged in');
-      alert('Vui lòng đăng nhập để sử dụng tính năng annotation');
+      toast.error('Vui lòng đăng nhập để sử dụng tính năng annotation');
       return;
     }
 
@@ -148,7 +122,6 @@ const ProcessedImageViewer = ({
         newStatus = 1; // Third click: back to has plaque
       }
 
-      console.log(`⚡ Updating subbox ${subbox.subbox_id} from ${subbox.plaque_status} to ${newStatus}`);
       
       await annotationService.updatePlaqueStatus(
         subbox.subbox_id, 
@@ -156,15 +129,13 @@ const ProcessedImageViewer = ({
         currentUser.id
       );
 
-      console.log('✅ Update successful, reloading annotations...');
       
       // Reload annotations to reflect change
       if (lightboxImage?.imageId) {
         await loadAnnotationsForImage(lightboxImage.imageId);
       }
     } catch (err) {
-      console.error('❌ Failed to update plaque status:', err);
-      alert('Có lỗi xảy ra khi cập nhật: ' + err.message);
+      toast.error('Có lỗi xảy ra khi cập nhật: ' + err.message);
     }
   };
 
@@ -510,17 +481,21 @@ const ProcessedImageViewer = ({
                 📊 Annotation Progress
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: '#94a3b8' }}>Total subboxes:</span>
-                  <span style={{ fontWeight: '600' }}>{annotationStats.total}</span>
+                {/* <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: '600', fontSize: '13px' }}>
+                  <span style={{ color: '#94a3b8' }}>Tổng subbox:</span>
+                  <span style={{ color: '#334155' }}>{annotationStats.total}</span>
+                </div> */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: '600', fontSize: '13px' }}>
+                  <span style={{ color: '#94a3b8' }}>Tổng subbox:</span>
+                  <span style={{ color: '#334155' }}>{annotationStats.total}</span>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: '#94a3b8' }}>Annotated:</span>
-                  <span style={{ fontWeight: '600', color: '#10b981' }}>{annotationStats.annotated}</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: '600', fontSize: '13px' }}>
+                  <span style={{ color: '#94a3b8' }}>Không mảng bám:</span>
+                  <span style={{ color: '#10b981' }}>{annotationStats.total - annotationStats.plaque_detected}</span>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: '#94a3b8' }}>Has plaque:</span>
-                  <span style={{ fontWeight: '600', color: '#ef4444' }}>{annotationStats.plaque_detected}</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: '600', fontSize: '13px' }}>
+                  <span style={{ color: '#94a3b8' }}>Có mảng bám:</span>
+                  <span style={{ color: '#ef4444' }}>{annotationStats.plaque_detected}</span>
                 </div>
                 <div style={{ 
                   marginTop: '8px', 
@@ -640,13 +615,6 @@ const ProcessedImageViewer = ({
               </div>
               {(() => {
                 const shouldShowCanvas = viewMode === 'processed' && annotations.length > 0;
-                console.log('🎬 Render decision:', { 
-                  viewMode, 
-                  annotationsLength: annotations.length,
-                  shouldShowCanvas,
-                  lightboxImageId: lightboxImage?.imageId
-                });
-                
                 return shouldShowCanvas ? (
                   <AnnotationCanvas
                     imageUrl={lightboxImage.url}

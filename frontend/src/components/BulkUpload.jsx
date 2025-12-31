@@ -1,4 +1,5 @@
 import { useState, useRef } from 'react'
+import toast from 'react-hot-toast'
 import { bulkUploadImages, getPatients, createPatient } from '../api'
 
 function BulkUpload() {
@@ -73,7 +74,7 @@ function BulkUpload() {
     })
 
     if (errors.length > 0) {
-      alert(`⚠️ Không thể parse ${errors.length} file:\n${errors.slice(0, 5).join('\n')}${errors.length > 5 ? '\n...' : ''}`)
+      toast.error(`⚠️ Không thể parse ${errors.length} file:\n${errors.slice(0, 5).join('\n')}${errors.length > 5 ? '\n...' : ''}`);
     }
 
     setFiles(newFiles)
@@ -109,7 +110,6 @@ function BulkUpload() {
       const response = await getPatients(`?search=${encodeURIComponent(query)}&limit=15`)
       setSearchResults(response.data.data || [])
     } catch (error) {
-      console.error('Search error:', error)
       setSearchResults([])
     }
   }
@@ -135,7 +135,7 @@ function BulkUpload() {
     
     // Validate form
     if (!newPatientForm.name.trim()) {
-      alert('Vui lòng nhập tên bệnh nhân')
+      toast.error('Vui lòng nhập tên bệnh nhân');
       return
     }
     
@@ -219,7 +219,7 @@ function BulkUpload() {
       const cocoData = JSON.parse(text)
 
       if (!cocoData.images || !cocoData.annotations || !cocoData.categories) {
-        alert('⚠️ File annotation không đúng định dạng COCO JSON. Cần có: images, annotations, categories')
+        toast.error('⚠️ File annotation không đúng định dạng COCO JSON. Cần có: images, annotations, categories');
         return
       }
 
@@ -245,7 +245,7 @@ function BulkUpload() {
       setAnnotationPreview(preview)
 
     } catch (error) {
-      alert('❌ Lỗi khi đọc file annotation: ' + error.message)
+      toast.error('❌ Lỗi khi đọc file annotation: ' + error.message);
     }
   }
 
@@ -263,13 +263,13 @@ function BulkUpload() {
 
   const handleUpload = async () => {
     if (parsedData.length === 0) {
-      alert('Không có file nào để upload')
+      toast.error('Không có file nào để upload');
       return
     }
 
     // Validate annotation file
     if (!annotationFile) {
-      alert('⚠️ Vui lòng chọn file annotation (JSON) - Bắt buộc')
+      toast.error('⚠️ Vui lòng chọn file annotation (JSON) - Bắt buộc');
       return
     }
 
@@ -371,7 +371,6 @@ setPatientMappings({})
       }
       
     } catch (error) {
-      console.error('Upload error:', error)
       setUploadResult({
         success: false,
         error: error.response?.data?.error || error.message
