@@ -84,6 +84,26 @@ const getPresignedUrl = async (objectName, expirySeconds = 3600) => {
   }
 };
 
+// Get presigned PUT URL to allow clients to upload directly to MinIO
+const getPresignedPutUrl = async (objectName, expirySeconds = 3600) => {
+  try {
+    const url = await minioClient.presignedPutObject(BUCKET_NAME, objectName, expirySeconds);
+    const protocol = process.env.MINIO_USE_SSL === 'true' ? 'https' : 'http';
+    const host = process.env.MINIO_HOST || 'localhost';
+    const port = process.env.MINIO_PORT || '9000';
+
+    if (!url.startsWith('http')) {
+      const fullUrl = `${protocol}://${host}:${port}${url}`;
+      return { success: true, url: fullUrl };
+    }
+
+    return { success: true, url };
+  } catch (error) {
+    console.error('Error getting presigned PUT URL:', error);
+    return { success: false, error: error.message };
+  }
+};
+
 // Delete file
 const deleteFile = async (objectName) => {
   try {
@@ -147,14 +167,72 @@ const uploadFromBuffer = async (buffer, objectName, contentType = 'application/o
   }
 };
 
+const crypto = require('crypto');
+
+/**
+ * Check if an object exists in MinIO
+ */
+const objectExists = async (objectName) => {
+  try {
+    await minioClient.statObject(BUCKET_NAME, objectName);
+    return true;
+  } catch (err) {
+    // statObject throws if object not found
+    return false;
+  }
+};
+
+/**
+ * Compute SHA256 hex of a buffer
+ */
+const computeHash = (buffer) => {
+  return crypto.createHash('sha256').update(buffer).digest('hex');
+};
+
+/**
+ * Upload buffer to a deterministic object path based on its hash if not already present.
+ * Returns { success, url, objectName, existed, hash }
+ */
+const ensureUploadByHash = async (buffer, prefix = 'processed', ext = 'jpg', contentType = 'application/octet-stream') => {
+  try {
+    await ensureBucket();
+
+    const hash = computeHash(buffer);
+    const objectName = `${prefix}/${hash}.${ext}`;
+
+    const exists = await objectExists(objectName);
+    if (exists) {
+      const url = `/${BUCKET_NAME}/${objectName}`;
+      return { success: true, url, objectName, existed: true, hash };
+    }
+
+    // Upload with hash metadata
+    const metadata = {
+      'Content-Type': contentType,
+      'X-Content-Hash': hash
+    };
+
+    await minioClient.putObject(BUCKET_NAME, objectName, buffer, buffer.length, metadata);
+    const url = `/${BUCKET_NAME}/${objectName}`;
+    return { success: true, url, objectName, existed: false, hash };
+  } catch (error) {
+    console.error('Error in ensureUploadByHash:', error);
+    return { success: false, error: error.message };
+  }
+};
+
 module.exports = {
   uploadFile,
   uploadFiles,
   uploadFromBuffer,
   getFileUrl,
   getPresignedUrl,
+  getPresignedPutUrl,
   deleteFile,
   deleteFiles,
   downloadFile,
-  ensureBucket
+  ensureBucket,
+  ensureUploadByHash,
+  computeHash,
+  objectExists
 };

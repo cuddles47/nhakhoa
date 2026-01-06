@@ -156,22 +156,37 @@ class ImageProcessingController {
         const processedObjectName = `visits/${visitId}/processed/${processedFilename}`;
         
         // Upload with proper content-type
-        const uploadResult = await storageService.uploadFromBuffer(
-          fileBuffer, 
-          processedObjectName, 
-          'image/jpeg'
-        );
-        
-        console.log(`Upload result:`, uploadResult);
-        
-        const urlProcessed = `/${process.env.MINIO_BUCKET}/${processedObjectName}`;
-        updatePromises.push(
-          Image.update(originalImage.id, {
-            url_processed: urlProcessed,
-            processing_status: 'completed',
-            processed_at: new Date()
-          })
-        );
+        // Use deterministic upload by hash to avoid re-uploading identical processed images
+        const ext = path.extname(processedFilename).replace(/^\./, '') || 'jpg';
+        const ensureResult = await storageService.ensureUploadByHash(fileBuffer, 'processed_by_hash', ext, 'image/jpeg');
+
+        console.log(`Ensure upload result:`, ensureResult);
+
+        if (!ensureResult.success) {
+          console.error('Failed to upload processed image:', ensureResult.error);
+          continue;
+        }
+
+        const urlProcessed = `/${process.env.MINIO_BUCKET}/${ensureResult.objectName}`;
+
+        // Update image record, but be tolerant if DB hasn't yet run the migration to add processed_hash
+        updatePromises.push((async () => {
+          try {
+            return await Image.update(originalImage.id, {
+              url_processed: urlProcessed,
+              processing_status: 'completed',
+              processed_at: new Date(),
+              processed_hash: ensureResult.hash
+            });
+          } catch (err) {
+            console.warn('Image.update with processed_hash failed (maybe migration not applied), retrying without processed_hash:', err.message);
+            return await Image.update(originalImage.id, {
+              url_processed: urlProcessed,
+              processing_status: 'completed',
+              processed_at: new Date()
+            });
+          }
+        })());
 
         // Parse and save subbox annotations
         const annotationFile = `image_${imageId}.txt`;

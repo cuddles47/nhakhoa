@@ -72,4 +72,8 @@ export const bulkUploadImages = (formData) => {
 };
 export const getBulkUploadHistory = () => api.get('/bulk-upload/history');
 
+// Presigned + confirm flows for direct-to-MinIO folder uploads
+export const generatePresignedUrls = (data) => api.post('/bulk-upload/presigned', data);
+export const confirmBulkUpload = (data) => api.post('/bulk-upload/confirm', data);
+
 export default api;

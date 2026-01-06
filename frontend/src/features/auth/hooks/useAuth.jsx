@@ -21,11 +21,20 @@ export const AuthProvider = ({ children }) => {
   const loginMutation = useMutation({
     mutationFn: (credentials) => authService.login(credentials),
     onSuccess: (data) => {
-      const { user, token } = data.data;
-      setUser(user);
-      setToken(token);
-      localStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
-      localStorage.setItem(AUTH_TOKEN_KEY, token);
+      const payload = data && data.data ? data.data : {};
+      const user = payload.user;
+      const token = payload.accessToken || payload.token || null;
+
+      if (user) {
+        setUser(user);
+        localStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
+      }
+
+      if (token) {
+        setToken(token);
+        localStorage.setItem(AUTH_TOKEN_KEY, token);
+      }
+
       navigate('/patients');
     }
   });

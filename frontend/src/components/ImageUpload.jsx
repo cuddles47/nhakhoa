@@ -38,7 +38,7 @@ function ImageUpload() {
       const allImages = imagesResponse.data.data || []
       
       // Convert all MinIO paths to proxy URLs
-      const API_URL = import.meta.env.VITE_API_URL || 'http://192.168.1.17:3000';
+      const API_URL = import.meta.env.VITE_API_URL;
       const convertToProxyUrl = (url) => {
         if (!url) return url;
         if (url.startsWith('http')) return url;

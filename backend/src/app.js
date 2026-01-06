@@ -20,9 +20,9 @@ app.use(cors({
 // Parse cookies so authenticate middleware can read httpOnly cookie
 app.use(cookieParser());
 
-// Middleware setup
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
+// Middleware setup - increase body size limit to 50MB for bulk uploads
+app.use(bodyParser.json({ limit: '50mb' }));
+app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
 app.use(requestLogger);
 // Nếu cần validateRequest, dùng ở từng route
 

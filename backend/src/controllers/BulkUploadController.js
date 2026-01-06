@@ -20,10 +20,54 @@ class BulkUploadController {
             const metadata = JSON.parse(req.body.metadata || '[]');
             
             // When using upload.fields(), req.files is an object with field names as keys
-            const imageFiles = req.files?.images || [];
+            let imageFiles = req.files?.images || [];
             const annotationFiles = req.files?.annotationFile || [];
-            const annotationFile = annotationFiles[0];
-            
+            let annotationFile = annotationFiles[0];
+
+            // If an archive (zip) was uploaded, extract it to disk and add files to `imageFiles` (use disk paths to avoid memory pressure)
+            const archiveFiles = req.files?.archive || [];
+            const path = require('path');
+            const fs = require('fs');
+            const { extractZipToDir, listFilesRecursively, cleanupDir } = require('../utils/zipHandler');
+            let extractedDir = null;
+
+            if (archiveFiles.length > 0) {
+                const archive = archiveFiles[0];
+                const archivePath = archive.path || (archive.destination && archive.filename ? path.join(archive.destination, archive.filename) : null);
+                if (!archivePath || !fs.existsSync(archivePath)) {
+                    return res.status(400).json({ success: false, error: 'Archive not found on disk' });
+                }
+
+                // Extract archive
+                extractedDir = path.join(process.env.UPLOAD_DIR || '/tmp/uploads', `bulk_extract_${Date.now()}`);
+
+                try {
+                    const extracted = await extractZipToDir(archivePath, extractedDir);
+
+                    // If an annotations.json is inside the archive, prefer that as the annotation file
+                    for (const e of extracted) {
+                        const base = path.basename(e.name).toLowerCase();
+                        if (!annotationFile && (base === 'annotations.json' || base.endsWith('.json') && base.includes('coco'))) {
+                            try {
+                                annotationFile = { buffer: fs.readFileSync(e.path) };
+                                console.log('Found annotation file inside archive:', e.name);
+                                continue; // don't add annotation json as an image
+                            } catch (err) {
+                                console.warn('Failed to read annotation file from archive:', err.message);
+                            }
+                        }
+
+                        // Add extracted file as a "file-like" object with path so storage.uploadFile can fPutObject
+                        imageFiles.push({ originalname: path.basename(e.name), path: e.path });
+                    }
+
+                    console.log(`Extracted ${extracted.length} files from archive to ${extractedDir}`);
+                } catch (err) {
+                    await cleanupDir(extractedDir);
+                    return res.status(400).json({ success: false, error: `Failed to extract archive: ${err.message}` });
+                }
+            }
+
             if (!annotationFile) {
                 return res.status(400).json({ 
                     success: false, 
@@ -308,6 +352,17 @@ class BulkUploadController {
                 error: error.message || 'Bulk upload failed'
             });
         } finally {
+            // Clean up extracted archive files if any
+            try {
+                if (typeof extractedDir !== 'undefined' && extractedDir) {
+                    const { cleanupDir } = require('../utils/zipHandler');
+                    await cleanupDir(extractedDir);
+                    console.log('Cleaned up extracted dir:', extractedDir);
+                }
+            } catch (cleanupErr) {
+                console.warn('Error cleaning up extracted files:', cleanupErr.message);
+            }
+
             client.release();
         }
     }
@@ -343,6 +398,345 @@ class BulkUploadController {
                 success: false, 
                 error: error.message 
             });
+        }
+    }
+
+    /**
+     * Confirm a bulk upload where clients uploaded files directly to MinIO using presigned URLs
+     * Body: {
+     *   metadata: [ { patientId, visitDate, images: [{ filename, position, ext }], patientMapping } ],
+     *   files: [ { objectName, originalName, contentType } ],
+     *   annotationObjectName: 'bucket/path/to/annotations.json' (or relative 'visits/.../annotations.json')
+     * }
+     */
+    async confirmUpload(req, res) {
+        const { pool } = require('../config/database');
+        const client = await pool.connect();
+
+        try {
+            const { metadata } = req.body;
+            const files = req.body.files || [];
+            const annotationObjectName = req.body.annotationObjectName;
+            const uploadMode = req.body.uploadMode || 'raw';
+
+            // For stained uploads, annotation file is not required
+            if (!annotationObjectName && uploadMode !== 'stained') {
+                return res.status(400).json({ success: false, error: 'annotationObjectName is required for raw image uploads' });
+            }
+
+            if (!metadata || !Array.isArray(metadata) || metadata.length === 0) {
+                return res.status(400).json({ success: false, error: 'No metadata provided' });
+            }
+
+            if (!files || files.length === 0) {
+                return res.status(400).json({ success: false, error: 'No files provided. Use presigned upload then confirm.' });
+            }
+
+            // For stained image uploads, we don't need COCO annotations
+            let cocoByPatient = {};
+            if (uploadMode === 'raw' && annotationObjectName) {
+                // Ensure annotation object exists in MinIO
+                const storage = require('../services/storage');
+                const annotationExists = await storage.objectExists(annotationObjectName);
+                if (!annotationExists) {
+                    return res.status(400).json({ success: false, error: 'Annotation file not found in object store. Please include annotations.json in the uploaded folder.' });
+                }
+
+                // Download annotation file from MinIO
+                let annotationBuffer;
+                try {
+                    annotationBuffer = await storage.downloadFile(annotationObjectName);
+                } catch (err) {
+                    return res.status(400).json({ success: false, error: 'Failed to download annotation file from object store' });
+                }
+
+                // Parse COCO and split by patient
+                try {
+                    cocoByPatient = require('../services/annotationService').splitCOCOByPatient(annotationBuffer);
+                } catch (err) {
+                    return res.status(400).json({ success: false, error: `Failed to parse annotation file: ${err.message}` });
+                }
+            }
+
+            // Start transaction
+            await client.query('BEGIN');
+
+            let patientsCreated = 0;
+            let visitsCreated = 0;
+            let imagesCreated = 0;
+            let annotationsCreated = 0;
+            const createdPatients = [];
+            const createdVisits = [];
+            const createdImages = [];
+            const imagesWithoutAnnotations = [];
+
+            // Helper to resolve file object by filename, with preference for stained images
+            const findFileObject = (filename, preferredCategory = null) => {
+                // If preferring stained, look for files with /stained/ in the objectName first
+                if (preferredCategory === 'stained') {
+                    const stainedMatch = files.find(f => 
+                        (f.originalName === filename || f.originalname === filename) && 
+                        f.objectName && f.objectName.includes('/stained/')
+                    );
+                    if (stainedMatch) return stainedMatch;
+                    
+                    // Also try suffix matching for stained
+                    const stainedSuffix = files.find(f => 
+                        f.objectName && f.objectName.includes('/stained/') && 
+                        f.objectName.endsWith(`/${filename}`)
+                    );
+                    if (stainedSuffix) return stainedSuffix;
+                }
+                
+                // Default: exact name match first
+                const direct = files.find(f => f.originalName === filename || f.originalname === filename);
+                if (direct) return direct;
+                
+                // Fallback: suffix match (for raw files)
+                return files.find(f => f.objectName && f.objectName.endsWith(`/${filename}`) && !f.objectName.includes('/stained/'));
+            };
+
+            for (const group of metadata) {
+                const { patientId, visitDate, images: imageInfos, patientMapping } = group;
+
+                let patient, visit;
+
+                if (uploadMode === 'stained') {
+                    // For stained images, find existing patient and visit
+                    const existingPatients = await require('../models/Patient').findAll({ search: `ID:${patientId}`, limit: 1 });
+                    if (!existingPatients || existingPatients.data.length === 0) {
+                        console.warn(`No existing patient found for ID: ${patientId}, skipping stained images for this patient`);
+                        continue;
+                    }
+                    patient = existingPatients.data[0];
+
+                    // Find existing visit for this date
+                    const existingVisits = await require('../models/Visit').findAll({ 
+                        where: { patient_id: patient.id },
+                        limit: 100
+                    });
+                    
+                    const matchingVisit = existingVisits.data.find(v => {
+                        const vDate = new Date(v.visit_date).toISOString().split('T')[0];
+                        const targetDate = new Date(visitDate).toISOString().split('T')[0];
+                        return vDate === targetDate;
+                    });
+
+                    if (!matchingVisit) {
+                        console.warn(`No existing visit found for patient ${patientId} on ${visitDate}, skipping stained images`);
+                        continue;
+                    }
+                    visit = matchingVisit;
+                } else {
+                    // For raw images, handle patient creation/lookup as before
+                    if (patientMapping) {
+                        if (patientMapping.type === 'existing') {
+                            patient = patientMapping.patient;
+                        } else if (patientMapping.type === 'new') {
+                            patient = await require('../models/Patient').create({
+                                name: patientMapping.patient.name,
+                                phone: patientMapping.patient.phone || '',
+                                dob: patientMapping.patient.dob || null,
+                                gender: patientMapping.patient.gender || 'unknown',
+                                notes: patientMapping.patient.notes || `Patient ID: ${patientId}`
+                            });
+                            patientsCreated++;
+                            createdPatients.push(patient);
+                        }
+                    } else {
+                        let existingPatient = await require('../models/Patient').findAll({ search: `ID:${patientId}`, limit: 1 });
+                        if (!existingPatient || existingPatient.data.length === 0) {
+                            patient = await require('../models/Patient').create({
+                                name: `Bệnh Nhân #${patientId}`,
+                                phone: '',
+                                dob: null,
+                                gender: 'unknown',
+                                notes: `Patient ID: ${patientId}`
+                            });
+                            patientsCreated++;
+                            createdPatients.push(patient);
+                        } else {
+                            patient = existingPatient.data[0];
+                        }
+                    }
+
+                    // Create visit for raw images
+                    visit = await require('../models/Visit').create({
+                        patient_id: patient.id,
+                        visit_date: visitDate,
+                        diagnosis: 'Khám chỉnh nha định kỳ',
+                        notes: `Bulk upload - Patient ID: ${patientId}`,
+                        status: 'completed'
+                    });
+                    visitsCreated++;
+                    createdVisits.push(visit);
+                }
+
+                // Upload or link patient-specific COCO if exists in parsed cocoByPatient (only for raw uploads)
+                const patientKey = `Patient_${patientId}`;
+                const patientCOCO = uploadMode === 'raw' ? cocoByPatient[patientKey] : null;
+                
+                if (uploadMode === 'raw' && patientCOCO) {
+                    try {
+                        // Use storage.ensureUploadByHash to avoid duplicate uploads
+                        const cocoJSON = JSON.stringify(patientCOCO, null, 2);
+                        const cocoBuffer = Buffer.from(cocoJSON, 'utf-8');
+                        const uploadRes = await storage.ensureUploadByHash(cocoBuffer, `visits/${visit.id}/annotations`, 'json', 'application/json');
+
+                        if (uploadRes.success && uploadRes.objectName) {
+                            await client.query(
+                                'UPDATE visits SET annotation_file_url = $1 WHERE id = $2',
+                                [`/${process.env.MINIO_BUCKET}/${uploadRes.objectName}`, visit.id]
+                            );
+                            console.log(`Stored COCO file for ${patientId} at ${uploadRes.objectName}`);
+                        }
+                    } catch (error) {
+                        console.error(`Failed to upload COCO for ${patientId}:`, error.message);
+                    }
+                }
+
+                // Parse per-patient COCO into imageMap and annotationsByImage if available (only for raw uploads)
+                let imageMap = {}, annotationsByImage = {}, categoryMap = {};
+                if (uploadMode === 'raw' && patientCOCO) {
+                    try {
+                        const parsed = require('../services/annotationService').parseCOCOFile(Buffer.from(JSON.stringify(patientCOCO)));
+                        imageMap = parsed.imageMap;
+                        annotationsByImage = parsed.annotationsByImage;
+                        categoryMap = parsed.categoryMap;
+                    } catch (error) {
+                        console.error(`Failed to parse patient COCO for ${patientId}:`, error.message);
+                    }
+                }
+
+                // Helper function to create image record
+                async function createImageRecord(fileObj, imageInfo, visit, category, imageMap, annotationsByImage) {
+                    // Build MinIO URL
+                    const objectName = fileObj.objectName || fileObj.objectname || fileObj.path || fileObj.key;
+                    const url = objectName.startsWith('/') ? objectName : `/${process.env.MINIO_BUCKET}/${objectName}`;
+    
+                    const imageData = {
+                        visit_id: visit.id,
+                        url: url,
+                        original_filename: fileObj.originalName || fileObj.originalname || imageInfo.filename,
+                        image_category: category,
+                        image_type: imageInfo.position.substring(0, 50),
+                        image_index: null,
+                        validation_status: 'pending',
+                        notes: `Bulk upload: ${fileObj.originalName || imageInfo.filename} (${category})`,
+                        width: null,
+                        height: null,
+                        has_annotations: false,
+                        annotation_count: 0
+                    };
+    
+                    const image = await require('../models/Image').create(imageData);
+                    imagesCreated++;
+                    createdImages.push(image);
+    
+                    // Only match annotations for raw images (stained images are just for viewing)
+                    if (category === 'raw') {
+                        const matchedImage = require('../services/annotationService').matchFilenameToAnnotations(fileObj.originalName || imageInfo.filename, imageMap);
+    
+                        if (matchedImage) {
+                            const cocoImageId = matchedImage.coco_id;
+                            const imageAnnotations = annotationsByImage[cocoImageId] || [];
+    
+                            if (imageAnnotations.length > 0) {
+                                const annotationsToStore = imageAnnotations.map(ann => ({
+                                    image_id: image.id,
+                                    coco_image_id: cocoImageId,
+                                    category_id: ann.category_id,
+                                    category_name: ann.category_name,
+                                    bbox: ann.bbox,
+                                    area: ann.area
+                                }));
+    
+                                await require('../services/annotationService').storeBatchAnnotations(client, annotationsToStore);
+    
+                                await client.query(
+                                    'UPDATE images SET has_annotations = true, annotation_count = $1 WHERE id = $2',
+                                    [imageAnnotations.length, image.id]
+                                );
+    
+                                annotationsCreated += imageAnnotations.length;
+                            } else {
+                                imagesWithoutAnnotations.push(fileObj.originalName || imageInfo.filename);
+                            }
+                        } else {
+                            imagesWithoutAnnotations.push(fileObj.originalName || imageInfo.filename);
+                        }
+                    }
+                }
+
+                // For each image info, find matching uploaded objects and create Image records
+                const imageCategory = uploadMode === 'stained' ? 'stained' : 'raw';
+                
+                for (const imageInfo of imageInfos) {
+                    const fileObj = findFileObject(imageInfo.filename, uploadMode === 'stained' ? 'stained' : 'raw');
+                    if (fileObj) {
+                        await createImageRecord(fileObj, imageInfo, visit, imageCategory, imageMap, annotationsByImage);
+                    } else {
+                        console.warn(`${imageCategory} file not found in uploaded objects: ${imageInfo.filename}`);
+                    }
+                }
+            }
+    
+            // Commit
+            await client.query('COMMIT');
+    
+            res.status(201).json({
+                success: true,
+                message: uploadMode === 'stained' 
+                    ? 'Stained images uploaded and mapped successfully'
+                    : 'Bulk upload (confirm) completed successfully',
+                data: {
+                    patientsCreated,
+                    visitsCreated,
+                    imagesCreated,
+                    annotationsCreated,
+                    uploadMode,
+                    imagesWithoutAnnotations: imagesWithoutAnnotations.length > 0 ? imagesWithoutAnnotations : undefined,
+                    patients: createdPatients,
+                    visits: createdVisits,
+                    images: createdImages
+                }
+            });
+        } catch (error) {
+            await client.query('ROLLBACK');
+            console.error('Confirm bulk upload error:', error);
+            res.status(500).json({ success: false, error: error.message });
+        } finally {
+            client.release();
+        }
+    }
+
+    /**
+     * Generate presigned PUT URLs so clients can upload directly to MinIO
+     * Expects JSON body: { files: [{ objectName, contentType }] }
+     */
+    async generatePresignedUrls(req, res) {
+        try {
+            const files = req.body.files || [];
+            if (!Array.isArray(files) || files.length === 0) {
+                return res.status(400).json({ success: false, error: 'files array is required' });
+            }
+
+            const urls = [];
+            for (const f of files) {
+                const objectName = f.objectName;
+                const expiry = f.expirySeconds || 3600;
+                const presigned = await storage.getPresignedPutUrl(objectName, expiry);
+                if (!presigned.success) {
+                    urls.push({ objectName, success: false, error: presigned.error });
+                } else {
+                    urls.push({ objectName, success: true, url: presigned.url });
+                }
+            }
+
+            res.json({ success: true, data: urls });
+        } catch (error) {
+            console.error('Error generating presigned URLs:', error);
+            res.status(500).json({ success: false, error: error.message });
         }
     }
 }
