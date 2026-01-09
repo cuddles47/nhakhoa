@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react';
-import { useAuth } from '../../auth/hooks/useAuth';
 import Button from '../../../components/ui/Button';
 import LoadingSpinner from '../../../components/ui/LoadingSpinner';
 import { FiUpload, FiX, FiZoomIn, FiChevronLeft, FiChevronRight } from 'react-icons/fi';
 import AnnotationCanvas from '../../../components/AnnotationCanvas';
 import annotationService from '../../../services/annotationService';
-import { toast } from 'react-hot-toast';
+import { useAuth } from '../../auth/hooks/useAuth';
+import toast from 'react-hot-toast';
 
 const ProcessedImageViewer = ({ 
   visitId, 
@@ -22,7 +22,7 @@ const ProcessedImageViewer = ({
   const [lightboxImage, setLightboxImage] = useState(null); // { url, label, position, stainedUrl, imageId, image }
   const [annotations, setAnnotations] = useState([]); // teeth array with subboxes
   const [annotationStats, setAnnotationStats] = useState(null);
-  const { user: currentUser } = useAuth();
+  const { user: currentUser, isAuthenticated } = useAuth();
 
   const hasProcessed = processedImages.some(img => img.url_processed);
   
@@ -31,6 +31,7 @@ const ProcessedImageViewer = ({
     if (hasProcessed && processing) {
       setViewMode('processed');
       setProcessing(false);
+      toast.success('Xử lý ảnh thành công!');
     }
   }, [hasProcessed, processing]);
   
@@ -64,19 +65,17 @@ const ProcessedImageViewer = ({
       return false;
     });
   };
-  
-  // ...existing code...
 
   const handleProcessClick = async () => {
-    // ...existing code...
-    
     setProcessing(true);
     setError(null);
     
     try {
       const result = await onProcessClick();
     } catch (err) {
-      setError(err.message || 'Có lỗi xảy ra khi xử lý ảnh');
+      const errorMsg = err.message || 'Có lỗi xảy ra khi xử lý ảnh';
+      setError(errorMsg);
+      toast.error(errorMsg);
       setProcessing(false);
     }
   };
@@ -97,6 +96,7 @@ const ProcessedImageViewer = ({
         setAnnotationStats(null);
       }
     } catch (err) {
+      toast.error('Không thể tải annotations');
       setAnnotations([]);
       setAnnotationStats(null);
     }
@@ -104,24 +104,14 @@ const ProcessedImageViewer = ({
 
   // Handle subbox click to toggle plaque status
   const handleSubboxClick = async (subbox, tooth) => {
-    // ...existing code...
-    
-    if (!currentUser) {
+    if (!isAuthenticated || !currentUser) {
       toast.error('Vui lòng đăng nhập để sử dụng tính năng annotation');
       return;
     }
 
     try {
-      // Toggle: null -> 1 -> 0 -> 1 ...
-      let newStatus;
-      if (subbox.plaque_status === null) {
-        newStatus = 1; // First click: mark as has plaque
-      } else if (subbox.plaque_status === 1) {
-        newStatus = 0; // Second click: mark as no plaque
-      } else {
-        newStatus = 1; // Third click: back to has plaque
-      }
-
+      // Toggle: flip between 0 and 1 (no plaque <-> has plaque)
+      const newStatus = subbox.plaque_status === 1 ? 0 : 1;
       
       await annotationService.updatePlaqueStatus(
         subbox.subbox_id, 
@@ -129,6 +119,7 @@ const ProcessedImageViewer = ({
         currentUser.id
       );
 
+      toast.success(newStatus === 1 ? 'Đánh dấu có mảng bám' : 'Đánh dấu không có mảng bám');
       
       // Reload annotations to reflect change
       if (lightboxImage?.imageId) {
@@ -481,29 +472,17 @@ const ProcessedImageViewer = ({
                 📊 Annotation Progress
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                {/* <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: '600', fontSize: '13px' }}>
-                  <span style={{ color: '#94a3b8' }}>Tổng subbox:</span>
-                  <span style={{ color: '#334155' }}>{annotationStats.total}</span>
-                </div> */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: '600', fontSize: '13px' }}>
-                  <span style={{ color: '#94a3b8' }}>Tổng subbox:</span>
-                  <span style={{ color: '#334155' }}>{annotationStats.total}</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#94a3b8' }}>Total subbox:</span>
+                  <span style={{ fontWeight: '600' }}>{annotationStats.total}</span>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: '600', fontSize: '13px' }}>
-                  <span style={{ color: '#94a3b8' }}>Không mảng bám:</span>
-                  <span style={{ color: '#10b981' }}>{annotationStats.total - annotationStats.plaque_detected}</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#94a3b8' }}>No plaque:</span>
+                  <span style={{ fontWeight: '600', color: '#10b981' }}>{annotationStats.total - annotationStats.plaque_detected}</span>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: '600', fontSize: '13px' }}>
-                  <span style={{ color: '#94a3b8' }}>Có mảng bám:</span>
-                  <span style={{ color: '#ef4444' }}>{annotationStats.plaque_detected}</span>
-                </div>
-                <div style={{ 
-                  marginTop: '8px', 
-                  paddingTop: '8px', 
-                  borderTop: '1px solid rgba(255,255,255,0.2)',
-                  fontWeight: '600'
-                }}>
-                  {Number(annotationStats.percentage || 0).toFixed(1)}% complete
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#94a3b8' }}>Has plaque:</span>
+                  <span style={{ fontWeight: '600', color: '#ef4444' }}>{annotationStats.plaque_detected}</span>
                 </div>
               </div>
             </div>
@@ -590,7 +569,9 @@ const ProcessedImageViewer = ({
             alignItems: 'center',
             justifyContent: 'center',
             marginTop: '60px',
-            marginBottom: '40px'
+            marginBottom: '40px',
+            minHeight: 0,
+            overflow: 'hidden'
           }}>
             {/* Left: Raw/Processed với annotation overlay */}
             <div style={{
@@ -599,7 +580,9 @@ const ProcessedImageViewer = ({
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
-              justifyContent: 'center'
+              justifyContent: 'center',
+              minHeight: 0,
+              minWidth: 0
             }}>
               <div style={{
                 background: 'rgba(255, 255, 255, 0.1)',
@@ -615,6 +598,7 @@ const ProcessedImageViewer = ({
               </div>
               {(() => {
                 const shouldShowCanvas = viewMode === 'processed' && annotations.length > 0;
+                
                 return shouldShowCanvas ? (
                   <AnnotationCanvas
                     imageUrl={lightboxImage.url}
@@ -652,7 +636,9 @@ const ProcessedImageViewer = ({
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
-              justifyContent: 'center'
+              justifyContent: 'center',
+              minHeight: 0,
+              minWidth: 0
             }}>
               <div style={{
                 background: 'rgba(147, 51, 234, 0.3)',

@@ -79,7 +79,7 @@ class AuthController {
             const { password_hash, ...userInfo } = user;
 
             // Set httpOnly cookie for refresh token
-                const isProduction = process.env.NODE_ENV === 'production';
+                const isProduction = process.env.NODE_ENV === 'development' ? false : true;
                 const cookieOptions = {
                     httpOnly: true,
                     secure: isProduction, // chỉ bật secure khi production
@@ -109,7 +109,7 @@ class AuthController {
     static async logout(req, res) {
         try {
             // Clear refreshToken cookie on logout
-            res.clearCookie('refreshToken', { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'None' });
+            res.clearCookie('refreshToken', { httpOnly: true, secure: process.env.NODE_ENV === 'development' ? false : true, sameSite: 'None' });
             return res.json({ success: true, message: 'Đã đăng xuất' });
         } catch (error) {
             console.error('Logout error:', error);

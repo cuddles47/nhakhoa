@@ -16,26 +16,11 @@ const imageSchemas = require('../validators/imageValidator');
 const multer = require('multer');
 
 // Configure multer for file uploads
-// Use diskStorage for large/bulk uploads to avoid keeping many files in memory
-const uploadDir = process.env.UPLOAD_DIR || '/tmp/uploads';
-const fs = require('fs');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-
-const storageDisk = multer.diskStorage({
-    destination: function (req, file, cb) {
-        cb(null, uploadDir);
-    },
-    filename: function (req, file, cb) {
-        const uniq = Date.now();
-        cb(null, `${uniq}_${file.originalname}`);
-    }
-});
-
 const upload = multer({ 
-    storage: storageDisk,
+    storage: multer.memoryStorage(),
     limits: {
-        fileSize: parseInt(process.env.MAX_UPLOAD_FILE_BYTES || (500 * 1024 * 1024)) // default 500MB per file
-        // NOTE: intentionally not setting a strict `files` limit here; for extremely large bulk uploads prefer ZIP + extract or presigned uploads
+        fileSize: 10 * 1024 * 1024, // 10MB per file
+        files: 99 // Max 99 files
     }
 });
 
@@ -83,15 +68,10 @@ router.delete('/api/images/:id', imageController.deleteImage);
 
 // Bulk upload routes
 router.post('/api/bulk-upload', upload.fields([
-    { name: 'images', maxCount: 10000 }, // still supported but for very large uploads prefer `archive` or presigned uploads
-    { name: 'annotationFile', maxCount: 1 },
-    { name: 'archive', maxCount: 1 } // accept a single zip archive containing many files (recommended)
+    { name: 'images', maxCount: 100 },
+    { name: 'annotationFile', maxCount: 1 }
 ]), bulkUploadController.bulkUpload);
 router.get('/api/bulk-upload/history', bulkUploadController.getUploadHistory);
-// Generate presigned PUT URLs so clients can upload large numbers of files directly to MinIO
-router.post('/api/bulk-upload/presigned', express.json(), bulkUploadController.generatePresignedUrls);
-// Confirm a bulk upload where files were uploaded directly to MinIO (client provided objectNames)
-router.post('/api/bulk-upload/confirm', express.json(), bulkUploadController.confirmUpload);
 
 // Image processing routes
 router.post('/api/visits/:visitId/process-images', imageProcessingController.processRawImages);
