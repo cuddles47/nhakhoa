@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
-import { FiUsers, FiUploadCloud, FiMenu, FiX, FiChevronLeft, FiChevronRight, FiUser, FiLogOut } from 'react-icons/fi'
+import { FiUsers, FiUploadCloud, FiMenu, FiX, FiChevronLeft, FiChevronRight, FiUser, FiLogOut, FiImage } from 'react-icons/fi'
 import { useAuth } from '../features/auth/hooks/useAuth';
 import { MdOutlineHealthAndSafety } from 'react-icons/md'
 
@@ -19,9 +19,16 @@ function Sidebar({ onLogout }) {
     {
       path: '/bulk-upload',
       icon: FiUploadCloud,
-      label: 'Upload Hàng Loạt',
-      description: 'Nhập ảnh từ folder',
+      label: 'Bulk upload ảnh raw',
+      description: 'Upload ảnh raw',
       isActive: (pathname) => pathname === '/bulk-upload'
+    },
+    {
+      path: '/bulk-upload/stained',
+      icon: FiImage,
+      label: 'Bulk upload ảnh nhuộm',
+      description: 'Upload ảnh sau nhuộm',
+      isActive: (pathname) => pathname === '/bulk-upload/stained'
     }
   ]
 

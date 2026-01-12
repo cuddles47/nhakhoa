@@ -3,6 +3,7 @@ const storage = require('../services/storage');
 const { uploadFiles } = storage;
 const db = require('../services/database');
 const annotationService = require('../services/annotationService');
+const stainedValidator = require('../services/stainedImageValidator');
 
 class BulkUploadController {
     /**
@@ -737,6 +738,289 @@ class BulkUploadController {
         } catch (error) {
             console.error('Error generating presigned URLs:', error);
             res.status(500).json({ success: false, error: error.message });
+        }
+    }
+
+    /**
+     * Upload stained images for an existing visit (or create new visit if not exists)
+     * Simpler flow than bulk upload - no annotations, just position matching
+     * Supports chunked upload with progress
+     * POST /api/bulk-upload/stained
+     * Body (multipart): { visitId OR (patientId + visitDate), images[] }
+     */
+    async uploadStainedImages(req, res) {
+        const { pool } = require('../config/database');
+        const client = await pool.connect();
+        
+        try {
+            let visitId = req.body.visitId;
+            const patientId = req.body.patientId;
+            const visitDate = req.body.visitDate;
+            
+            // If visitId not provided, try to find or create visit
+            if (!visitId && patientId && visitDate) {
+                // Find existing visit by patient + date
+                const visitQuery = `
+                    SELECT id FROM visits 
+                    WHERE patient_id = $1 
+                    AND DATE(visit_date) = DATE($2)
+                    AND deleted_at IS NULL
+                    LIMIT 1
+                `;
+                const visitResult = await client.query(visitQuery, [patientId, visitDate]);
+                
+                if (visitResult.rows.length > 0) {
+                    visitId = visitResult.rows[0].id;
+                } else {
+                    // Create new visit
+                    const createVisitQuery = `
+                        INSERT INTO visits (patient_id, visit_date, status, notes)
+                        VALUES ($1, $2, 'pending', 'Tạo từ bulk upload ảnh nhuộm')
+                        RETURNING id
+                    `;
+                    const newVisitResult = await client.query(createVisitQuery, [patientId, visitDate]);
+                    visitId = newVisitResult.rows[0].id;
+                }
+            }
+            
+            if (!visitId) {
+                return res.status(400).json({ 
+                    success: false, 
+                    error: 'visitId hoặc (patientId + visitDate) là bắt buộc' 
+                });
+            }
+            
+            // Get uploaded files
+            const imageFiles = req.files?.images || [];
+            
+            if (!imageFiles || imageFiles.length === 0) {
+                return res.status(400).json({ 
+                    success: false, 
+                    error: 'No image files uploaded' 
+                });
+            }
+            
+            // Validate batch
+            const validation = await stainedValidator.validateStainedImageBatch(visitId, imageFiles);
+            
+            if (!validation.valid) {
+                return res.status(400).json({
+                    success: false,
+                    error: validation.errors.join('. '),
+                    details: validation
+                });
+            }
+            
+            // Map images to positions (handle duplicates)
+            const { byPosition } = stainedValidator.mapImagesToPositions(validation.parsedImages);
+            
+            await client.query('BEGIN');
+            
+            let imagesCreated = 0;
+            let imagesReplaced = 0;
+            const createdImages = [];
+            
+            // Process each position
+            for (const [positionType, imageData] of Object.entries(byPosition)) {
+                const position = stainedValidator.STANDARD_POSITIONS.find(p => p.type === positionType);
+                
+                // Check if stained image exists for this position
+                const existingQuery = `
+                    SELECT id, url FROM images 
+                    WHERE visit_id = $1 
+                    AND image_category = 'stained' 
+                    AND image_type = $2
+                    AND deleted_at IS NULL
+                `;
+                const existingResult = await client.query(existingQuery, [visitId, positionType]);
+                
+                // Upload to MinIO
+                const file = imageData.file;
+                const timestamp = Date.now();
+                const ext = file.mimetype.split('/')[1] || 'jpg';
+                const objectName = `visits/${visitId}/stained_${positionType}_${timestamp}.${ext}`;
+                
+                const uploadResult = await storage.uploadFile(
+                    objectName,
+                    file.buffer,
+                    {
+                        'Content-Type': file.mimetype,
+                        'Content-Length': file.size
+                    }
+                );
+                
+                if (!uploadResult.success) {
+                    throw new Error(`Failed to upload to MinIO: ${uploadResult.error}`);
+                }
+                
+                const url = uploadResult.url;
+                
+                if (existingResult.rows.length > 0) {
+                    // Replace existing image
+                    const existingImage = existingResult.rows[0];
+                    
+                    // Update database record
+                    const updateQuery = `
+                        UPDATE images 
+                        SET url = $1,
+                            original_filename = $2,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = $3
+                        RETURNING *
+                    `;
+                    const updateResult = await client.query(updateQuery, [
+                        url,
+                        file.originalname,
+                        existingImage.id
+                    ]);
+                    
+                    createdImages.push(updateResult.rows[0]);
+                    imagesReplaced++;
+                    
+                    // TODO: Delete old image from MinIO
+                    // const oldObjectName = existingImage.url.replace(/^\/[^/]+\//, '');
+                    // await storage.deleteFile(oldObjectName);
+                } else {
+                    // Create new image record
+                    const insertQuery = `
+                        INSERT INTO images (
+                            visit_id, url, image_category, image_type, image_index,
+                            validation_status, original_filename, has_annotations, annotation_count
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                        RETURNING *
+                    `;
+                    const insertResult = await client.query(insertQuery, [
+                        visitId,
+                        url,
+                        'stained',
+                        positionType,
+                        position?.index || null,
+                        'pending',
+                        file.originalname,
+                        false,
+                        0
+                    ]);
+                    
+                    createdImages.push(insertResult.rows[0]);
+                    imagesCreated++;
+                }
+            }
+            
+            await client.query('COMMIT');
+            
+            res.status(201).json({
+                success: true,
+                message: `Upload thành công ${imagesCreated} ảnh mới, thay thế ${imagesReplaced} ảnh cũ`,
+                data: {
+                    visitId,
+                    imagesCreated,
+                    imagesReplaced,
+                    totalProcessed: imagesCreated + imagesReplaced,
+                    images: createdImages,
+                    validation: {
+                        warnings: validation.warnings,
+                        positionAnalysis: validation.positionAnalysis
+                    }
+                }
+            });
+            
+        } catch (error) {
+            await client.query('ROLLBACK');
+            console.error('Upload stained images error:', error);
+            res.status(500).json({ 
+                success: false, 
+                error: error.message 
+            });
+        } finally {
+            client.release();
+        }
+    }
+
+    /**
+     * Get upload status for a visit (for progress tracking)
+     * GET /api/visits/:visitId/stained-upload-status
+     */
+    async getStainedUploadStatus(req, res) {
+        try {
+            const { visitId } = req.params;
+            
+            const validation = await stainedValidator.validateVisitHasRawImages(visitId);
+            const existingStained = await stainedValidator.getExistingStainedImages(visitId);
+            
+            // Analyze which positions are covered
+            const stainedPositions = existingStained.map(img => img.image_type).filter(Boolean);
+            const allPositions = stainedValidator.STANDARD_POSITIONS;
+            
+            const coverage = allPositions.map(pos => ({
+                ...pos,
+                hasImage: stainedPositions.includes(pos.type)
+            }));
+            
+            res.json({
+                success: true,
+                data: {
+                    visitId: parseInt(visitId),
+                    hasRawImages: validation.valid,
+                    rawImageCount: validation.rawImages.length,
+                    stainedImageCount: existingStained.length,
+                    coverage,
+                    complete: existingStained.length === 9,
+                    message: validation.message
+                }
+            });
+            
+        } catch (error) {
+            console.error('Get stained upload status error:', error);
+            res.status(500).json({ 
+                success: false, 
+                error: error.message 
+            });
+        }
+    }
+
+    /**
+     * Get available visits for a patient (that have RAW images)
+     * GET /api/patients/:patientId/available-visits
+     */
+    async getAvailableVisitsForStained(req, res) {
+        try {
+            const { patientId } = req.params;
+            
+            // Get all visits for patient
+            const visits = await Visit.findByPatientId(patientId);
+            
+            // Check each visit for RAW images
+            const visitsWithStatus = await Promise.all(
+                visits.map(async (visit) => {
+                    const rawImages = await Image.findByCategory(visit.id, 'raw');
+                    const stainedImages = await Image.findByCategory(visit.id, 'stained');
+                    
+                    return {
+                        ...visit,
+                        rawImageCount: rawImages.length,
+                        stainedImageCount: stainedImages.length,
+                        hasRawImages: rawImages.length > 0,
+                        hasStainedImages: stainedImages.length > 0,
+                        stainedComplete: stainedImages.length === 9
+                    };
+                })
+            );
+            
+            // Filter to only visits with RAW images
+            const availableVisits = visitsWithStatus.filter(v => v.hasRawImages);
+            
+            res.json({
+                success: true,
+                data: availableVisits
+            });
+            
+        } catch (error) {
+            console.error('Get available visits error:', error);
+            res.status(500).json({ 
+                success: false, 
+                error: error.message 
+            });
         }
     }
 }

@@ -101,9 +101,22 @@ class ImageProcessingController {
       console.log('Calling image processing service...');
       const zipBuffer = await imageProcessingService.divideCorners(images, annotations);
       
+      console.log(`✅ Received ZIP buffer: ${zipBuffer.length} bytes`);
+      
       tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'processed-'));
+      console.log(`📂 Created temp dir: ${tempDir}`);
+      
       const zip = new AdmZip(zipBuffer);
+      
+      // Log ZIP contents
+      const zipEntries = zip.getEntries();
+      console.log(`📦 ZIP contains ${zipEntries.length} entries:`);
+      zipEntries.forEach(entry => {
+        console.log(`  - ${entry.entryName} (${entry.header.size} bytes)`);
+      });
+      
       zip.extractAllTo(tempDir, true);
+      console.log(`✅ Extracted ZIP to ${tempDir}`);
 
       const processedImagesPath = path.join(tempDir, 'images');
       const processedAnnotationsPath = path.join(tempDir, 'annotations');
@@ -196,8 +209,27 @@ class ImageProcessingController {
           const annotationContent = await fs.readFile(annotationPath, 'utf-8');
           console.log(`✅ Found annotation file for image ${imageId}, content length: ${annotationContent.length}`);
           
-          // Call method directly with await instead of pushing promise
-          const parsePromise = this._parseAndSaveSubboxes(imageId, annotationContent, originalImage.width, originalImage.height);
+          // Python service outputs annotations in 1024x1024 space (YOLO model output)
+          // But we need to scale subboxes to match original image dimensions (where teeth are)
+          const processedWidth = 1024;  // YOLO model output size
+          const processedHeight = 1024;
+          
+          // Get original image dimensions from originalImage
+          // Fallback to standard dimensions if not set (6240x4160 from typical camera)
+          const origWidth = originalImage.width || 6240;
+          const origHeight = originalImage.height || 4160;
+          
+          console.log(`📏 Image dimensions - Processed: ${processedWidth}x${processedHeight}, Original: ${origWidth}x${origHeight}`);
+          
+          // Call method with both processed and original dimensions for scaling
+          const parsePromise = this._parseAndSaveSubboxes(
+            imageId, 
+            annotationContent, 
+            processedWidth, 
+            processedHeight,
+            origWidth,
+            origHeight
+          );
           annotationPromises.push(parsePromise);
         } catch (annError) {
           console.error(`❌ Failed to read annotations for image ${imageId}:`, annError.message);
@@ -296,14 +328,33 @@ class ImageProcessingController {
    * Parse YOLO annotations and save subboxes to database
    * @param {number} imageId - Image ID
    * @param {string} annotationContent - YOLO format annotation content
-   * @param {number} imageWidth - Image width in pixels
-   * @param {number} imageHeight - Image height in pixels
+   * @param {number} processedWidth - Processed image width (1024)
+   * @param {number} processedHeight - Processed image height (1024)
+   * @param {number} originalWidth - Original image width for scaling
+   * @param {number} originalHeight - Original image height for scaling
    */
-  async _parseAndSaveSubboxes(imageId, annotationContent, imageWidth, imageHeight) {
+  async _parseAndSaveSubboxes(imageId, annotationContent, processedWidth, processedHeight, originalWidth, originalHeight) {
     const pool = require('../config/database');
     const lines = annotationContent.trim().split('\n').filter(line => line.trim());
     
-    console.log(`Parsing ${lines.length} annotations for image ${imageId}`);
+    console.log(`📝 Parsing ${lines.length} annotations for image ${imageId}`);
+    console.log(`   Processed: ${processedWidth}x${processedHeight}, Original: ${originalWidth}x${originalHeight}`);
+    console.log(`📄 First 3 lines:`, lines.slice(0, 3));
+    
+    if (!processedWidth || !processedHeight || processedWidth === 0 || processedHeight === 0) {
+      console.error(`❌ Invalid processed dimensions: ${processedWidth}x${processedHeight}`);
+      return;
+    }
+    
+    if (!originalWidth || !originalHeight || originalWidth === 0 || originalHeight === 0) {
+      console.error(`❌ Invalid original dimensions: ${originalWidth}x${originalHeight}`);
+      return;
+    }
+    
+    // Calculate scaling factors
+    const scaleX = originalWidth / processedWidth;
+    const scaleY = originalHeight / processedHeight;
+    console.log(`🔢 Scale factors: X=${scaleX.toFixed(2)}, Y=${scaleY.toFixed(2)}`);
     
     // Get all parent teeth from database (sorted by id for consistent ordering)
     const teethResult = await pool.query(`
@@ -331,17 +382,28 @@ class ImageProcessingController {
       const height = parseFloat(parts[4]);
       const toothId = parts.length === 6 ? parseInt(parts[5]) : null;
       
-      // Convert YOLO to pixel coordinates
-      const x = Math.round((xCenter - width / 2) * imageWidth);
-      const y = Math.round((yCenter - height / 2) * imageHeight);
-      const w = Math.round(width * imageWidth);
-      const h = Math.round(height * imageHeight);
+      // Convert YOLO normalized coords to pixel coords in PROCESSED space
+      const xProcessed = Math.round((xCenter - width / 2) * processedWidth);
+      const yProcessed = Math.round((yCenter - height / 2) * processedHeight);
+      const wProcessed = Math.round(width * processedWidth);
+      const hProcessed = Math.round(height * processedHeight);
       
       if (toothId !== null) {
         // 6 fields = subbox with parent tooth_id
+        // Scale from processed (1024x1024) to original dimensions to match tooth coords
+        const x = Math.round(xProcessed * scaleX);
+        const y = Math.round(yProcessed * scaleY);
+        const w = Math.round(wProcessed * scaleX);
+        const h = Math.round(hProcessed * scaleY);
+        
+        console.log(`📦 Subbox parsed: classId=${classId}, toothId=${toothId}, processed=[${xProcessed},${yProcessed},${wProcessed},${hProcessed}], scaled=[${x},${y},${w},${h}]`);
         subboxes.push({ classId, x, y, w, h, toothId });
       } else {
-        // 5 fields = parent tooth
+        // 5 fields = parent tooth (not used, we use DB teeth)
+        const x = Math.round(xProcessed * scaleX);
+        const y = Math.round(yProcessed * scaleY);
+        const w = Math.round(wProcessed * scaleX);
+        const h = Math.round(hProcessed * scaleY);
         teeth.push({ classId, x, y, w, h });
       }
     }
@@ -380,6 +442,9 @@ class ImageProcessingController {
       const bbox = [subbox.x, subbox.y, subbox.w, subbox.h];
       const area = subbox.w * subbox.h;
       const plaqueStatus = subbox.classId === 1 ? 1 : 0; // 1 = plaque, 0 = no plaque
+      
+      console.log(`💾 Inserting subbox: region=${region}, bbox=${JSON.stringify(bbox)}, area=${area}, plaqueStatus=${plaqueStatus}`);
+      
       await pool.query(`
         INSERT INTO image_annotations (image_id, coco_image_id, category_id, category_name, bbox, area, parent_annotation_id, subbox_region, source_type, plaque_status, predicted_plaque)
         SELECT $1, $2, $3, $4::varchar(50), $5::jsonb, $6, $7, $8::varchar(20), 'python_subbox', 0, $9

@@ -751,6 +751,24 @@ body {
   font-weight: 600;
 }
 
+.warning {
+  background: var(--warning-bg);
+  color: var(--warning);
+  padding: 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  border-left: 3px solid var(--warning);
+}
+
+.info {
+  background: var(--info-bg);
+  color: var(--info);
+  padding: 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  border-left: 3px solid var(--info);
+}
+
 .action-buttons {
   display: flex;
   gap: 8px;
