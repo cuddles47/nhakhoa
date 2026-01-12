@@ -1,34 +1,30 @@
 import { useState } from 'react'
-import { NavLink, useLocation } from 'react-router-dom'
+import { NavLink } from 'react-router-dom'
 import { FiUsers, FiUploadCloud, FiMenu, FiX, FiChevronLeft, FiChevronRight, FiUser, FiLogOut, FiImage } from 'react-icons/fi'
 import { useAuth } from '../features/auth/hooks/useAuth';
 import { MdOutlineHealthAndSafety } from 'react-icons/md'
 
 function Sidebar({ onLogout }) {
   const [collapsed, setCollapsed] = useState(false)
-  const location = useLocation()
-
   const menuItems = [
     {
       path: '/patients',
       icon: FiUsers,
       label: 'Quản Lý Bệnh Nhân',
-      description: 'Danh sách & hồ sơ bệnh nhân',
-      isActive: (pathname) => pathname.startsWith('/patients') || pathname === '/'
+      description: 'Danh sách & hồ sơ bệnh nhân'
     },
     {
       path: '/bulk-upload',
       icon: FiUploadCloud,
       label: 'Bulk upload ảnh raw',
       description: 'Upload ảnh raw',
-      isActive: (pathname) => pathname === '/bulk-upload'
+      exact: true
     },
     {
       path: '/bulk-upload/stained',
       icon: FiImage,
       label: 'Bulk upload ảnh nhuộm',
-      description: 'Upload ảnh sau nhuộm',
-      isActive: (pathname) => pathname === '/bulk-upload/stained'
+      description: 'Upload ảnh sau nhuộm'
     }
   ]
 
@@ -75,13 +71,13 @@ function Sidebar({ onLogout }) {
             
             {menuItems.map(item => {
               const IconComponent = item.icon
-              const isActive = item.isActive(location.pathname)
-              
+
               return (
                 <NavLink
                   key={item.path}
                   to={item.path}
-                  className={`nav-item ${isActive ? 'active' : ''}`}
+                  end={item.exact}
+                  className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
                   title={collapsed ? item.label : ''}
                 >
                   <span className="nav-icon">

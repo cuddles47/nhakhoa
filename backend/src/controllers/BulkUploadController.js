@@ -790,8 +790,8 @@ class BulkUploadController {
                 });
             }
             
-            // Get uploaded files
-            const imageFiles = req.files?.images || [];
+            // Get uploaded files (multer array puts files directly in req.files)
+            const imageFiles = req.files || [];
             
             if (!imageFiles || imageFiles.length === 0) {
                 return res.status(400).json({ 
@@ -961,7 +961,7 @@ class BulkUploadController {
                 success: true,
                 data: {
                     visitId: parseInt(visitId),
-                    hasRawImages: validation.valid,
+                    hasRawImages: validation.hasRawImages,  // Fixed: was validation.valid
                     rawImageCount: validation.rawImages.length,
                     stainedImageCount: existingStained.length,
                     coverage,

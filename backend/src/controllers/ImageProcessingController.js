@@ -195,7 +195,7 @@ class ImageProcessingController {
       const processedImages = updatedImages.filter(img => img.url_processed);
 
       // Return proxy URLs instead of presigned URLs (to avoid CORS)
-      const API_BASE_URL = process.env.API_URL || 'http://192.168.1.17:3000';
+      const API_BASE_URL = process.env.API_URL || 'http100.93.48.110://:3000';
       const imagesWithUrls = processedImages.map((image) => {
         // Convert MinIO path to proxy URL
         // e.g., /nhakhoa/visits/26/processed/processed_xxx.jpg -> /api/images/proxy/visits/26/processed/processed_xxx.jpg

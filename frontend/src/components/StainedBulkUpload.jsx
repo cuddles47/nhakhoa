@@ -1,6 +1,5 @@
 import { useState, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { FiUpload, FiArrowLeft, FiCheck, FiAlertCircle, FiImage, FiFolder } from 'react-icons/fi';
+import { FiUpload, FiCheck, FiAlertCircle } from 'react-icons/fi';
 import toast from 'react-hot-toast';
 import apiClient from '../services/apiClient';
 
@@ -10,7 +9,6 @@ import apiClient from '../services/apiClient';
  * Similar to BulkUpload but for stained images (no annotation file needed)
  */
 function StainedBulkUpload() {
-  const navigate = useNavigate();
   const fileInputRef = useRef(null);
   
   // File upload
@@ -43,14 +41,86 @@ function StainedBulkUpload() {
     };
   };
   
+  const collectFilesFromDataTransfer = async (dataTransfer) => {
+    try {
+      if (!dataTransfer?.items || dataTransfer.items.length === 0) {
+        return Array.from(dataTransfer?.files || []);
+      }
+
+      const traverseEntry = async (entry) => {
+        if (!entry) return [];
+
+        if (entry.isFile) {
+          return new Promise((resolve, reject) => {
+            entry.file((file) => resolve([file]), reject);
+          });
+        }
+
+        if (entry.isDirectory) {
+          const reader = entry.createReader();
+          const entries = [];
+
+          await new Promise((resolve, reject) => {
+            const readEntries = () => {
+              reader.readEntries((batch) => {
+                if (!batch.length) {
+                  resolve();
+                  return;
+                }
+                entries.push(...batch);
+                readEntries();
+              }, reject);
+            };
+            readEntries();
+          });
+
+          const files = [];
+          for (const child of entries) {
+            const childFiles = await traverseEntry(child);
+            files.push(...childFiles);
+          }
+          return files;
+        }
+
+        return [];
+      };
+
+      const entries = Array.from(dataTransfer.items)
+        .map(item => (item.webkitGetAsEntry ? item.webkitGetAsEntry() : null))
+        .filter(Boolean);
+
+      if (!entries.length) {
+        return Array.from(dataTransfer.files || []);
+      }
+
+      const files = [];
+      for (const entry of entries) {
+        const entryFiles = await traverseEntry(entry);
+        files.push(...entryFiles);
+      }
+
+      return files;
+    } catch (error) {
+      console.error('Không thể đọc folder từ drag & drop, fallback sang FileList:', error);
+      return Array.from(dataTransfer?.files || []);
+    }
+  };
+
   const handleFiles = (fileList) => {
-    const newFiles = Array.from(fileList);
+    const incomingFiles = Array.isArray(fileList) ? fileList : Array.from(fileList);
     const parsed = [];
     const errors = [];
+    const imageFiles = [];
     
-    newFiles.forEach(file => {
+    incomingFiles.forEach(file => {
+      const isLikelyImage = file.type?.startsWith('image/') || /\.(jpe?g|png)$/i.test(file.name);
+      if (!isLikelyImage) {
+        return;
+      }
+
       const info = parseFilename(file.name);
       if (info) {
+        imageFiles.push(file);
         parsed.push({
           file,
           ...info
@@ -71,7 +141,7 @@ function StainedBulkUpload() {
       return;
     }
     
-    setFiles(newFiles);
+    setFiles(imageFiles);
     
     // Group by patient ID and visit date
     const grouped = parsed.reduce((acc, item) => {
@@ -97,23 +167,104 @@ function StainedBulkUpload() {
     validateGroups(groupedArray);
   };
   
+  const normalizeIdentifier = (value = '') => {
+    if (value === null || value === undefined) return '';
+    return String(value)
+      .trim()
+      .replace(/[^a-zA-Z0-9]+/g, '')
+      .toLowerCase();
+  };
+
+  const fetchPatientsByQueries = async (queries) => {
+    const aggregated = [];
+    const seenIds = new Set();
+
+    for (const q of queries) {
+      if (!q) continue;
+      try {
+        const response = await apiClient.get('/api/patients', {
+          params: { search: q, limit: 50 }
+        });
+        const items = response.data?.data || [];
+        items.forEach(item => {
+          if (!seenIds.has(item.id)) {
+            seenIds.add(item.id);
+            aggregated.push(item);
+          }
+        });
+      } catch (error) {
+        console.warn('Không thể tìm bệnh nhân với query', q, error);
+      }
+    }
+
+    return aggregated;
+  };
+
+  const findMatchingPatient = (candidates, patientId) => {
+    const normalizedNumeric = patientId.replace(/[^0-9]/g, '');
+    const trimmed = patientId.replace(/^0+/, '');
+    const targetIdentifiers = [
+      normalizeIdentifier(patientId),
+      normalizeIdentifier(`patient_${patientId}`),
+      normalizeIdentifier(`Patient_${patientId}`),
+      normalizeIdentifier(`Patient ${patientId}`),
+      normalizeIdentifier(`benhnhan_${patientId}`),
+      normalizeIdentifier(`benhnhan ${patientId}`),
+      normalizeIdentifier(`benhnhan${patientId}`),
+      normalizeIdentifier(`benhnhan${trimmed}`),
+      normalizeIdentifier(`benhnhan#${patientId}`),
+      normalizeIdentifier(`patientid${patientId}`),
+      normalizeIdentifier(`patientid:${patientId}`)
+    ];
+
+    return candidates.find(candidate => {
+      const candidateIdentifiers = [
+        normalizeIdentifier(candidate.patient_id),
+        normalizeIdentifier(candidate.legacy_patient_code),
+        normalizeIdentifier(candidate.full_name),
+        normalizeIdentifier(candidate.name),
+        normalizeIdentifier(candidate.patient_code),
+        normalizeIdentifier(candidate.notes)
+      ].filter(Boolean);
+
+      const candidateNumeric = (candidate.patient_id || candidate.patient_code || candidate.id || '')
+        .toString()
+        .replace(/[^0-9]/g, '');
+
+      if (candidateNumeric && normalizedNumeric && candidateNumeric === normalizedNumeric) {
+        return true;
+      }
+
+      return candidateIdentifiers.some(id => id && targetIdentifiers.includes(id));
+    });
+  };
+
   const validateGroups = async (groups) => {
     // Validate each group: find matching patient (and visit if exists)
     const validatedGroups = await Promise.all(
       groups.map(async (group) => {
         try {
-          // Search for patient by patient_id
-          const patientResponse = await apiClient.get('/api/patients', {
-            params: { search: `Patient_${group.patientId}`, limit: 10 }
-          });
-          
-          const patients = patientResponse.data.data || [];
-          const matchingPatient = patients.find(p => 
-            p.patient_id === `Patient_${group.patientId}` || 
-            p.patient_id === group.patientId
-          );
+          const trimmedId = group.patientId.replace(/^0+/, '');
+          const searchQueries = [
+            `Patient_${group.patientId}`,
+            `Patient ${group.patientId}`,
+            `Patient-${group.patientId}`,
+            `Patient${group.patientId}`,
+            group.patientId,
+            trimmedId,
+            `#${group.patientId}`,
+            `BN ${group.patientId}`
+          ];
+          const candidates = await fetchPatientsByQueries(searchQueries);
+          const matchingPatient = findMatchingPatient(candidates, group.patientId);
           
           if (!matchingPatient) {
+            console.warn('[Bulk Stained] Không tìm thấy bệnh nhân', {
+              patientId: group.patientId,
+              queries: searchQueries,
+              candidateCount: candidates.length,
+              candidateSamples: candidates.slice(0, 5)
+            });
             return {
               ...group,
               valid: false,
@@ -184,7 +335,7 @@ function StainedBulkUpload() {
     const warningCount = validatedGroups.filter(g => g.valid && g.warning).length;
     
     if (invalidCount > 0) {
-      toast.warning(`${validCount} nhóm hợp lệ, ${invalidCount} nhóm lỗi`);
+      toast.error(`${validCount} nhóm hợp lệ, ${invalidCount} nhóm lỗi`, { duration: 5000 });
     } else if (warningCount > 0) {
       toast.success(`Tất cả ${validCount} nhóm đều hợp lệ! (${warningCount} nhóm có cảnh báo)`);
     } else {
@@ -201,10 +352,11 @@ function StainedBulkUpload() {
     setIsDragging(false);
   };
   
-  const handleDrop = (e) => {
+  const handleDrop = async (e) => {
     e.preventDefault();
     setIsDragging(false);
-    handleFiles(e.dataTransfer.files);
+    const filesFromDrop = await collectFilesFromDataTransfer(e.dataTransfer);
+    handleFiles(filesFromDrop);
   };
   
   const handleFileInputChange = (e) => {
@@ -367,6 +519,8 @@ function StainedBulkUpload() {
           <input
             ref={fileInputRef}
             type="file"
+            webkitdirectory="true"
+            directory="true"
             multiple
             accept="image/jpeg,image/jpg,image/png"
             onChange={handleFileInputChange}
@@ -380,19 +534,19 @@ function StainedBulkUpload() {
             
             {files.length === 0 ? (
               <>
-                <h3>Kéo thả nhiều file ảnh nhuộm vào đây</h3>
+                <h3>Kéo thả FOLDER ảnh nhuộm vào đây</h3>
                 <p style={{ color: 'var(--text-sub)', marginTop: '10px' }}>
-                  Hoặc click để chọn nhiều file
+                  Hoặc click để chọn toàn bộ folder chứa ảnh nhuộm
                 </p>
-                {/* <p style={{ color: 'var(--info)', marginTop: '8px', fontSize: '13px', fontWeight: '500' }}>
-                  📝 Format: <code>Patient_0061_28-10-2025_Top-right.jpg</code>
-                </p> */}
+                <p style={{ color: 'var(--info)', marginTop: '8px', fontSize: '13px', fontWeight: '500' }}>
+                  📝 Format tên file: <code>Patient_0061_28-10-2025_Top-right.jpg</code>
+                </p>
               </>
             ) : (
               <>
                 <h3>Đã chọn {files.length} ảnh</h3>
                 <p style={{ color: 'var(--text-sub)', marginTop: '10px' }}>
-                  Click để chọn file khác
+                  Click để chọn folder khác hoặc kéo thả folder mới
                 </p>
               </>
             )}
@@ -670,16 +824,6 @@ function StainedBulkUpload() {
             ))}
           </div>
           
-          <button
-            className="button"
-            onClick={() => navigate('/patients')}
-            style={{
-              width: '100%',
-              marginTop: '16px'
-            }}
-          >
-            Về danh sách bệnh nhân
-          </button>
           </div>
         )}
       </div>
