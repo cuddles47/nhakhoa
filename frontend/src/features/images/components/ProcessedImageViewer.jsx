@@ -5,6 +5,7 @@ import { FiUpload, FiX, FiZoomIn, FiChevronLeft, FiChevronRight } from 'react-ic
 import AnnotationCanvas from '../../../components/AnnotationCanvas';
 import annotationService from '../../../services/annotationService';
 import { useAuth } from '../../auth/hooks/useAuth';
+import toast from 'react-hot-toast';
 
 const ProcessedImageViewer = ({ 
   visitId, 
@@ -39,6 +40,7 @@ const ProcessedImageViewer = ({
       console.log('Auto-switching to processed view');
       setViewMode('processed');
       setProcessing(false);
+      toast.success('Xử lý ảnh thành công!');
     }
   }, [hasProcessed, processing]);
   
@@ -72,20 +74,8 @@ const ProcessedImageViewer = ({
       return false;
     });
   };
-  
-  console.log('ProcessedImageViewer render:', {
-    viewMode,
-    displayImagesCount: displayImages.length,
-    hasProcessed,
-    processing,
-    sampleImage: displayImages[0]
-  });
 
   const handleProcessClick = async () => {
-    console.log('=== PROCESS BUTTON CLICKED ===');
-    console.log('Visit ID:', visitId);
-    console.log('Raw images count:', rawImages.length);
-    
     setProcessing(true);
     setError(null);
     
@@ -94,8 +84,9 @@ const ProcessedImageViewer = ({
       const result = await onProcessClick();
       console.log('onProcessClick result:', result);
     } catch (err) {
-      console.error('Process error:', err);
-      setError(err.message || 'Có lỗi xảy ra khi xử lý ảnh');
+      const errorMsg = err.message || 'Có lỗi xảy ra khi xử lý ảnh';
+      setError(errorMsg);
+      toast.error(errorMsg);
       setProcessing(false);
     }
   };
@@ -121,7 +112,7 @@ const ProcessedImageViewer = ({
         setAnnotationStats(null);
       }
     } catch (err) {
-      console.error('❌ Failed to load annotations:', err);
+      toast.error('Không thể tải annotations');
       setAnnotations([]);
       setAnnotationStats(null);
     }
@@ -129,20 +120,14 @@ const ProcessedImageViewer = ({
 
   // Handle subbox click to toggle plaque status
   const handleSubboxClick = async (subbox, tooth) => {
-    console.log('🖱️ Subbox clicked:', subbox);
-    console.log('👤 Current user:', currentUser);
-    
     if (!isAuthenticated || !currentUser) {
-      console.error('❌ No user logged in');
-      alert('Vui lòng đăng nhập để sử dụng tính năng annotation');
+      toast.error('Vui lòng đăng nhập để sử dụng tính năng annotation');
       return;
     }
 
     try {
       // Toggle: flip between 0 and 1 (no plaque <-> has plaque)
       const newStatus = subbox.plaque_status === 1 ? 0 : 1;
-
-      console.log(`⚡ Updating subbox ${subbox.subbox_id} from ${subbox.plaque_status} to ${newStatus}`);
       
       await annotationService.updatePlaqueStatus(
         subbox.subbox_id, 
@@ -150,7 +135,7 @@ const ProcessedImageViewer = ({
         currentUser.id
       );
 
-      console.log('✅ Update successful, reloading annotations...');
+      toast.success(newStatus === 1 ? 'Đánh dấu có mảng bám' : 'Đánh dấu không có mảng bám');
       
       // Reload annotations to reflect change
       if (lightboxImage?.imageId) {
@@ -639,12 +624,6 @@ const ProcessedImageViewer = ({
               </div>
               {(() => {
                 const shouldShowCanvas = viewMode === 'processed' && annotations.length > 0;
-                console.log('🎬 Render decision:', { 
-                  viewMode, 
-                  annotationsLength: annotations.length,
-                  shouldShowCanvas,
-                  lightboxImageId: lightboxImage?.imageId
-                });
                 
                 return shouldShowCanvas ? (
                   <AnnotationCanvas

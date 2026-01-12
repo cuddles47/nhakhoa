@@ -14,7 +14,6 @@ const AnnotationCanvas = ({
   const [offset, setOffset] = useState({ x: 0, y: 0 });
 
   useEffect(() => {
-    // ...existing code...
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.src = imageUrl;
@@ -128,7 +127,6 @@ const AnnotationCanvas = ({
       y: (e.clientY - rect.top) * scaleY
     };
     
-    // ...existing code...
     
     return coords;
   };

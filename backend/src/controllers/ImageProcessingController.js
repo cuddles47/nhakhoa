@@ -12,8 +12,6 @@ class ImageProcessingController {
     const { visitId } = req.params;
     let tempDir = null;
 
-    console.log('===== PROCESS IMAGES REQUEST RECEIVED =====', { visitId });
-
     try {
       // 1. Fetch visit to get annotation file URL
       const visit = await Visit.findById(visitId);
@@ -28,20 +26,15 @@ class ImageProcessingController {
       let cocoData = null;
       if (visit.annotation_file_url) {
         try {
-          console.log(`Downloading COCO file from: ${visit.annotation_file_url}`);
-          const cocoObjectName = visit.annotation_file_url.replace(/^\/[^/]+\//, '');
+          const cocoObjectName = visit.annotation_file_url.replace(/^\/[^\/]+\//, '');
           const cocoBuffer = await storageService.downloadFile(cocoObjectName);
           cocoData = JSON.parse(cocoBuffer.toString('utf-8'));
-          console.log(`Loaded COCO: ${cocoData.images.length} images, ${cocoData.annotations.length} annotations`);
         } catch (error) {
-          console.error('Failed to download COCO file:', error.message);
           // Continue without COCO - will use database annotations as fallback
         }
       }
 
       const rawImages = await Image.findByCategory(visitId, 'raw');
-      
-      console.log(`Found ${rawImages.length} raw images`);
       
       if (rawImages.length === 0) {
         return res.status(400).json({
@@ -50,13 +43,11 @@ class ImageProcessingController {
         });
       }
 
-      console.log(`Processing ${rawImages.length} raw images for visit ${visitId}`);
-
       const images = [];
       const annotations = [];
 
       for (const img of rawImages) {
-        console.log(`Processing image ${img.id} (type=${img.image_type})`);
+
         const objectName = img.url.replace(/^\/[^/]+\//, '');
         const imageBuffer = await storageService.downloadFile(objectName);
         
@@ -72,7 +63,6 @@ class ImageProcessingController {
         const dbAnnotations = await Annotation.findByImageId(img.id);
         
         if (dbAnnotations.length === 0) {
-          console.warn(`No annotations found for image ${img.id}, using dummy data`);
           // Fallback to dummy annotation if no annotations in DB
           const dummyAnnotation = `11 0.5 0.5 0.1 0.15\n13 0.5 0.5 0.05 0.05`;
           annotations.push({
@@ -87,8 +77,6 @@ class ImageProcessingController {
           const yoloAnnotations = Annotation.convertToYOLO(dbAnnotations, imageWidth, imageHeight);
           const yoloText = Annotation.formatYOLOText(yoloAnnotations);
           
-          console.log(`Generated YOLO annotations for image ${img.id}: ${yoloAnnotations.length} annotations`);
-          
           annotations.push({
             buffer: Buffer.from(yoloText),
             filename: `image_${img.id}.txt`
@@ -96,24 +84,13 @@ class ImageProcessingController {
         }
       }
 
-      console.log(`Prepared ${images.length} images and ${annotations.length} annotations`);
-
-      console.log('Calling image processing service...');
       const zipBuffer = await imageProcessingService.divideCorners(images, annotations);
       
       console.log(`✅ Received ZIP buffer: ${zipBuffer.length} bytes`);
       
       tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'processed-'));
-      console.log(`📂 Created temp dir: ${tempDir}`);
       
       const zip = new AdmZip(zipBuffer);
-      
-      // Log ZIP contents
-      const zipEntries = zip.getEntries();
-      console.log(`📦 ZIP contains ${zipEntries.length} entries:`);
-      zipEntries.forEach(entry => {
-        console.log(`  - ${entry.entryName} (${entry.header.size} bytes)`);
-      });
       
       zip.extractAllTo(tempDir, true);
       console.log(`✅ Extracted ZIP to ${tempDir}`);
@@ -122,37 +99,21 @@ class ImageProcessingController {
       const processedAnnotationsPath = path.join(tempDir, 'annotations');
       const processedFiles = await fs.readdir(processedImagesPath);
       
-      console.log(`Found ${processedFiles.length} processed files`);
-      
-      // Check if annotations folder exists
-      try {
-        const annotationFiles = await fs.readdir(processedAnnotationsPath);
-        console.log(`✅ Found annotations folder with ${annotationFiles.length} files:`, annotationFiles);
-      } catch (err) {
-        console.error('❌ No annotations folder found in ZIP:', err.message);
-      }
-      
       const updatePromises = [];
       const annotationPromises = [];
       
       for (const file of processedFiles) {
-        console.log(`Processing file: ${file}`);
         const match = file.match(/image_(\d+)\./);
         if (!match) {
-          console.log(`Skipping file (no match): ${file}`);
           continue;
         }
         
-        // Match by image ID instead of image_index
         const imageId = parseInt(match[1]);
         const originalImage = rawImages.find(img => img.id === imageId);
         
         if (!originalImage) {
-          console.log(`No matching original image found for ID: ${imageId}`);
           continue;
         }
-        
-        console.log(`Matched file ${file} to image ID ${imageId}`);
 
         const processedFilePath = path.join(processedImagesPath, file);
         const fileBuffer = await fs.readFile(processedFilePath);
@@ -163,9 +124,6 @@ class ImageProcessingController {
         const originalFilename = path.basename(originalImage.url);
         const processedFilename = originalFilename.replace(/^raw_/, 'processed_');
         
-        console.log(`Original filename: ${originalFilename}`);
-        console.log(`Processed filename: ${processedFilename}`);
-        
         const processedObjectName = `visits/${visitId}/processed/${processedFilename}`;
         
         // Upload with proper content-type
@@ -173,10 +131,7 @@ class ImageProcessingController {
         const ext = path.extname(processedFilename).replace(/^\./, '') || 'jpg';
         const ensureResult = await storageService.ensureUploadByHash(fileBuffer, 'processed_by_hash', ext, 'image/jpeg');
 
-        console.log(`Ensure upload result:`, ensureResult);
-
         if (!ensureResult.success) {
-          console.error('Failed to upload processed image:', ensureResult.error);
           continue;
         }
 
@@ -192,7 +147,6 @@ class ImageProcessingController {
               processed_hash: ensureResult.hash
             });
           } catch (err) {
-            console.warn('Image.update with processed_hash failed (maybe migration not applied), retrying without processed_hash:', err.message);
             return await Image.update(originalImage.id, {
               url_processed: urlProcessed,
               processing_status: 'completed',
@@ -207,7 +161,6 @@ class ImageProcessingController {
         
         try {
           const annotationContent = await fs.readFile(annotationPath, 'utf-8');
-          console.log(`✅ Found annotation file for image ${imageId}, content length: ${annotationContent.length}`);
           
           // Python service outputs annotations in 1024x1024 space (YOLO model output)
           // But we need to scale subboxes to match original image dimensions (where teeth are)
@@ -218,8 +171,6 @@ class ImageProcessingController {
           // Fallback to standard dimensions if not set (6240x4160 from typical camera)
           const origWidth = originalImage.width || 6240;
           const origHeight = originalImage.height || 4160;
-          
-          console.log(`📏 Image dimensions - Processed: ${processedWidth}x${processedHeight}, Original: ${origWidth}x${origHeight}`);
           
           // Call method with both processed and original dimensions for scaling
           const parsePromise = this._parseAndSaveSubboxes(
@@ -232,15 +183,11 @@ class ImageProcessingController {
           );
           annotationPromises.push(parsePromise);
         } catch (annError) {
-          console.error(`❌ Failed to read annotations for image ${imageId}:`, annError.message);
-          console.error(`    Tried path: ${annotationPath}`);
         }
       }
 
       await Promise.all(updatePromises);
-      console.log(`Waiting for ${annotationPromises.length} annotation parse operations...`);
       await Promise.all(annotationPromises);
-      console.log('All annotations parsed and saved');
       
       await fs.rm(tempDir, { recursive: true, force: true });
 
@@ -261,8 +208,6 @@ class ImageProcessingController {
           rawProxyUrl = `${API_BASE_URL}/api/images/proxy/${rawProxyPath}`;
         }
         
-        console.log(`Generated proxy URL: ${proxyUrl}`);
-        
         return {
           ...image,
           url: rawProxyUrl,
@@ -271,9 +216,6 @@ class ImageProcessingController {
         };
       });
 
-      console.log(`Returning ${imagesWithUrls.length} images with proxy URLs`);
-      console.log(`Sample processed URL:`, imagesWithUrls[0]?.url_processed);
-
       res.json({
         success: true,
         data: imagesWithUrls,
@@ -281,13 +223,10 @@ class ImageProcessingController {
       });
 
     } catch (error) {
-      console.error('Error processing images:', error);
-      
       if (tempDir) {
         try {
           await fs.rm(tempDir, { recursive: true, force: true });
         } catch (e) {
-          console.error('Cleanup error:', e);
         }
       }
 
@@ -316,7 +255,7 @@ class ImageProcessingController {
         }
       });
     } catch (error) {
-      console.error('Error getting processing status:', error);
+
       res.status(500).json({ 
         success: false, 
         error: error.message 
@@ -337,24 +276,17 @@ class ImageProcessingController {
     const pool = require('../config/database');
     const lines = annotationContent.trim().split('\n').filter(line => line.trim());
     
-    console.log(`📝 Parsing ${lines.length} annotations for image ${imageId}`);
-    console.log(`   Processed: ${processedWidth}x${processedHeight}, Original: ${originalWidth}x${originalHeight}`);
-    console.log(`📄 First 3 lines:`, lines.slice(0, 3));
-    
     if (!processedWidth || !processedHeight || processedWidth === 0 || processedHeight === 0) {
-      console.error(`❌ Invalid processed dimensions: ${processedWidth}x${processedHeight}`);
       return;
     }
     
     if (!originalWidth || !originalHeight || originalWidth === 0 || originalHeight === 0) {
-      console.error(`❌ Invalid original dimensions: ${originalWidth}x${originalHeight}`);
       return;
     }
     
     // Calculate scaling factors
     const scaleX = originalWidth / processedWidth;
     const scaleY = originalHeight / processedHeight;
-    console.log(`🔢 Scale factors: X=${scaleX.toFixed(2)}, Y=${scaleY.toFixed(2)}`);
     
     // Get all parent teeth from database (sorted by id for consistent ordering)
     const teethResult = await pool.query(`
@@ -365,7 +297,6 @@ class ImageProcessingController {
     `, [imageId]);
     
     const dbTeeth = teethResult.rows;
-    console.log(`Found ${dbTeeth.length} parent teeth in DB`);
     
     // Parse annotations - 6 fields = subbox, 5 fields = tooth
     const teeth = [];
@@ -396,7 +327,6 @@ class ImageProcessingController {
         const w = Math.round(wProcessed * scaleX);
         const h = Math.round(hProcessed * scaleY);
         
-        console.log(`📦 Subbox parsed: classId=${classId}, toothId=${toothId}, processed=[${xProcessed},${yProcessed},${wProcessed},${hProcessed}], scaled=[${x},${y},${w},${h}]`);
         subboxes.push({ classId, x, y, w, h, toothId });
       } else {
         // 5 fields = parent tooth (not used, we use DB teeth)
@@ -407,8 +337,6 @@ class ImageProcessingController {
         teeth.push({ classId, x, y, w, h });
       }
     }
-    
-    console.log(`Parsed ${teeth.length} teeth and ${subboxes.length} subboxes from YOLO`);
     
     // Map: YOLO tooth CLASS ID (as produced by Python service) → DB tooth id
     // Note: Python uses the original tooth class as `tooth_id` field in 6-field format.
@@ -423,7 +351,6 @@ class ImageProcessingController {
     for (const sb of subboxes) {
       expectedSubboxCounts[sb.toothId] = (expectedSubboxCounts[sb.toothId] || 0) + 1;
     }
-    console.log('ℹ️ Expected subboxes per toothId from file:', expectedSubboxCounts);
     
     // Assign regionNames sequentially for each toothId
     let subboxCount = 0;
@@ -432,7 +359,6 @@ class ImageProcessingController {
     for (const subbox of subboxes) {
       const parentId = toothClassIdMap[subbox.toothId];
       if (!parentId) {
-        console.log(`⚠️ Skipping subbox with invalid tooth_id=${subbox.toothId} (no mapping to DB tooth)`);
         continue;
       }
       // Assign region sequentially for each toothId
@@ -442,8 +368,6 @@ class ImageProcessingController {
       const bbox = [subbox.x, subbox.y, subbox.w, subbox.h];
       const area = subbox.w * subbox.h;
       const plaqueStatus = subbox.classId === 1 ? 1 : 0; // 1 = plaque, 0 = no plaque
-      
-      console.log(`💾 Inserting subbox: region=${region}, bbox=${JSON.stringify(bbox)}, area=${area}, plaqueStatus=${plaqueStatus}`);
       
       await pool.query(`
         INSERT INTO image_annotations (image_id, coco_image_id, category_id, category_name, bbox, area, parent_annotation_id, subbox_region, source_type, plaque_status, predicted_plaque)
@@ -464,7 +388,6 @@ class ImageProcessingController {
       ]);
       subboxCount++;
     }
-    console.log(`Completed: created ${subboxCount} subboxes for image ${imageId}`);
 
     // Diagnostics: compare expected vs created per toothId
     const actualSubboxCounts = {};
@@ -472,8 +395,6 @@ class ImageProcessingController {
       if (!toothClassIdMap[sb.toothId]) continue;
       actualSubboxCounts[sb.toothId] = (actualSubboxCounts[sb.toothId] || 0) + 1;
     }
-    console.log('ℹ️ Expected subboxes per toothId:', expectedSubboxCounts);
-    console.log('ℹ️ Created (actual) subboxes per toothId:', actualSubboxCounts);
   }
 }
 

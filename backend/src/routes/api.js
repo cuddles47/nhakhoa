@@ -73,13 +73,6 @@ router.post('/api/bulk-upload', upload.fields([
 ]), bulkUploadController.bulkUpload);
 router.get('/api/bulk-upload/history', bulkUploadController.getUploadHistory);
 
-// Stained image bulk upload routes
-router.post('/api/bulk-upload/stained', upload.fields([
-    { name: 'images', maxCount: 9 }
-]), bulkUploadController.uploadStainedImages);
-router.get('/api/visits/:visitId/stained-upload-status', bulkUploadController.getStainedUploadStatus);
-router.get('/api/patients/:patientId/available-visits', bulkUploadController.getAvailableVisitsForStained);
-
 // Image processing routes
 router.post('/api/visits/:visitId/process-images', imageProcessingController.processRawImages);
 router.get('/api/visits/:visitId/processing-status', imageProcessingController.getProcessingStatus);
