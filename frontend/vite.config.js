@@ -10,7 +10,7 @@ export default defineConfig(({ mode }) => {
       host: '0.0.0.0', // Allow external connections
       hmr: {
         port: 4004,
-        host: '100.93.48.110'  // Use the external IP for HMR WebSocket
+        host: '192.168.88.69'  // Use the external IP for HMR WebSocket
       },
       proxy: {
         '/api': {

@@ -9,7 +9,9 @@ const app = express();
 const cookieParser = require('cookie-parser');
 
 // CORS setup - allow only frontend origin when credentials are required
-const FRONTEND_URL = 'http://100.93.48.110:4004';
+// const FRONTEND_URL = 'http://100.93.48.110:4004';
+const FRONTEND_URL = 'http://192.168.88.69:4004';
+
 app.use(cors({
   origin: FRONTEND_URL,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
