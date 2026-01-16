@@ -1,4 +1,5 @@
 import { useState, useRef } from 'react'
+import toast from 'react-hot-toast'
 import { bulkUploadImages, getPatients, createPatient } from '../api'
 
 function BulkUpload() {
@@ -8,7 +9,6 @@ function BulkUpload() {
   const [uploading, setUploading] = useState(false)
   const [uploadResult, setUploadResult] = useState(null)
   const fileInputRef = useRef(null)
-  const annotationInputRef = useRef(null)
   
   // Annotation file state
   const [annotationFile, setAnnotationFile] = useState(null)
@@ -55,28 +55,131 @@ function BulkUpload() {
     }
   }
 
-  const handleFiles = (fileList) => {
-    const newFiles = Array.from(fileList)
+  const processAnnotationFile = async (file, groupedData) => {
+    try {
+      const text = await file.text()
+      const cocoData = JSON.parse(text)
+
+      if (!cocoData.images || !cocoData.annotations || !cocoData.categories) {
+        toast.error('⚠️ File annotation không đúng định dạng COCO JSON');
+        return
+      }
+
+      setAnnotationFile(file)
+
+      // Generate preview statistics
+      const preview = {
+        totalImages: cocoData.images.length,
+        totalAnnotations: cocoData.annotations.length,
+        categories: cocoData.categories.map(c => c.name),
+        imageAnnotationCounts: {}
+      }
+
+      cocoData.annotations.forEach(ann => {
+        preview.imageAnnotationCounts[ann.image_id] = 
+          (preview.imageAnnotationCounts[ann.image_id] || 0) + 1
+      })
+
+      preview.avgAnnotations = (preview.totalAnnotations / preview.totalImages).toFixed(1)
+      setAnnotationPreview(preview)
+
+      // Analyze missing images
+      analyzeMissingImages(cocoData, groupedData)
+
+    } catch (error) {
+      toast.error('❌ Lỗi khi đọc file annotation: ' + error.message);
+    }
+  }
+
+  const analyzeMissingImages = (cocoData, groupedData) => {
+    // Expected 9 positions per patient
+    const expectedPositions = [
+      'upper_right', 'upper_center', 'upper_left',
+      'middle_right', 'middle_center', 'middle_left',
+      'lower_right', 'lower_center', 'lower_left'
+    ]
+
+    const positionLabels = {
+      'upper_right': 'Trên phải',
+      'upper_center': 'Trên giữa',
+      'upper_left': 'Trên trái',
+      'middle_right': 'Giữa phải',
+      'middle_center': 'Giữa',
+      'middle_left': 'Giữa trái',
+      'lower_right': 'Dưới phải',
+      'lower_center': 'Dưới giữa',
+      'lower_left': 'Dưới trái'
+    }
+
+    const missingReport = []
+
+    groupedData.forEach(group => {
+      const uploadedPositions = group.images.map(img => img.position)
+      const missingPositions = expectedPositions.filter(pos => !uploadedPositions.includes(pos))
+      
+      if (missingPositions.length > 0) {
+        const missingLabels = missingPositions.map(pos => positionLabels[pos] || pos)
+        missingReport.push({
+          patientId: group.patientId,
+          visitDate: group.visitDate,
+          totalImages: group.images.length,
+          missingCount: missingPositions.length,
+          missingPositions: missingLabels
+        })
+      }
+    })
+
+    if (missingReport.length > 0) {
+      let message = `⚠️ Phát hiện ${missingReport.length} bệnh nhân thiếu ảnh:\n\n`
+      missingReport.forEach(report => {
+        message += `• Patient #${report.patientId} (${new Date(report.visitDate).toLocaleDateString('vi-VN')}):\n`
+        message += `  - Có: ${report.totalImages}/9 ảnh\n`
+        message += `  - Thiếu ${report.missingCount}: ${report.missingPositions.join(', ')}\n\n`
+      })
+      
+      toast.warning(message, { duration: 10000 })
+    } else {
+      toast.success('✓ Tất cả bệnh nhân đều có đủ 9 ảnh!');
+    }
+  }
+
+  const handleFiles = async (fileList) => {
+    const allFiles = Array.from(fileList)
     const parsed = []
     const errors = []
+    let foundAnnotationFile = null
 
-    newFiles.forEach(file => {
+    // Separate image files and annotation file
+    const imageFiles = []
+    
+    for (const file of allFiles) {
+      // Check if it's annotation file (.json)
+      if (file.name.endsWith('.json') || file.name.includes('annotation') || file.name.includes('_annotations.coco')) {
+        foundAnnotationFile = file
+        continue
+      }
+      
+      // Try to parse as image file
       const info = parseFilename(file.name)
       if (info) {
+        imageFiles.push(file)
         parsed.push({
           file,
           ...info
         })
       } else {
-        errors.push(file.name)
+        // Might be image but can't parse filename
+        if (file.type.startsWith('image/')) {
+          errors.push(file.name)
+        }
       }
-    })
-
-    if (errors.length > 0) {
-      alert(`⚠️ Không thể parse ${errors.length} file:\n${errors.slice(0, 5).join('\n')}${errors.length > 5 ? '\n...' : ''}`)
     }
 
-    setFiles(newFiles)
+    if (errors.length > 0) {
+      toast.error(`⚠️ Không thể parse ${errors.length} file:\n${errors.slice(0, 5).join('\n')}${errors.length > 5 ? '\n...' : ''}`);
+    }
+
+    setFiles(imageFiles)
     
     // Group by patient ID and visit date
     const grouped = parsed.reduce((acc, item) => {
@@ -92,7 +195,16 @@ function BulkUpload() {
       return acc
     }, {})
 
-    setParsedData(Object.values(grouped))
+    const groupedArray = Object.values(grouped)
+    setParsedData(groupedArray)
+    
+    // Auto-detect and process annotation file
+    if (foundAnnotationFile) {
+      toast.success(`✓ Tìm thấy file annotation: ${foundAnnotationFile.name}`);
+      await processAnnotationFile(foundAnnotationFile, groupedArray)
+    } else if (imageFiles.length > 0) {
+      toast.warning('⚠️ Không tìm thấy file annotation (.json) trong folder');
+    }
     
     // Reset patient mappings when new files are loaded
     setPatientMappings({})
@@ -109,7 +221,6 @@ function BulkUpload() {
       const response = await getPatients(`?search=${encodeURIComponent(query)}&limit=15`)
       setSearchResults(response.data.data || [])
     } catch (error) {
-      console.error('Search error:', error)
       setSearchResults([])
     }
   }
@@ -135,7 +246,7 @@ function BulkUpload() {
     
     // Validate form
     if (!newPatientForm.name.trim()) {
-      alert('Vui lòng nhập tên bệnh nhân')
+      toast.error('Vui lòng nhập tên bệnh nhân');
       return
     }
     
@@ -209,52 +320,9 @@ function BulkUpload() {
     handleFiles(files)
   }
 
-  const handleAnnotationFileSelect = async (e) => {
-    const file = e.target.files[0]
-    if (!file) return
-
-    try {
-      // Validate JSON format
-      const text = await file.text()
-      const cocoData = JSON.parse(text)
-
-      if (!cocoData.images || !cocoData.annotations || !cocoData.categories) {
-        alert('⚠️ File annotation không đúng định dạng COCO JSON. Cần có: images, annotations, categories')
-        return
-      }
-
-      setAnnotationFile(file)
-
-      // Generate preview statistics
-      const preview = {
-        totalImages: cocoData.images.length,
-        totalAnnotations: cocoData.annotations.length,
-        categories: cocoData.categories.map(c => c.name),
-        imageAnnotationCounts: {}
-      }
-
-      // Count annotations per image
-      cocoData.annotations.forEach(ann => {
-        preview.imageAnnotationCounts[ann.image_id] = 
-          (preview.imageAnnotationCounts[ann.image_id] || 0) + 1
-      })
-
-      const avgAnnotations = (preview.totalAnnotations / preview.totalImages).toFixed(1)
-      preview.avgAnnotations = avgAnnotations
-
-      setAnnotationPreview(preview)
-
-    } catch (error) {
-      alert('❌ Lỗi khi đọc file annotation: ' + error.message)
-    }
-  }
-
   const handleAnnotationFileClear = () => {
     setAnnotationFile(null)
     setAnnotationPreview(null)
-    if (annotationInputRef.current) {
-      annotationInputRef.current.value = ''
-    }
   }
 
   const handleBrowseClick = () => {
@@ -263,13 +331,13 @@ function BulkUpload() {
 
   const handleUpload = async () => {
     if (parsedData.length === 0) {
-      alert('Không có file nào để upload')
+      toast.error('Không có file nào để upload');
       return
     }
 
     // Validate annotation file
     if (!annotationFile) {
-      alert('⚠️ Vui lòng chọn file annotation (JSON) - Bắt buộc')
+      toast.error('⚠️ Vui lòng chọn file annotation (JSON) - Bắt buộc');
       return
     }
 
@@ -366,12 +434,8 @@ setPatientMappings({})
       setPatientMappings({})
       setAnnotationFile(null)
       setAnnotationPreview(null)
-      if (annotationInputRef.current) {
-        annotationInputRef.current.value = ''
-      }
       
     } catch (error) {
-      console.error('Upload error:', error)
       setUploadResult({
         success: false,
         error: error.response?.data?.error || error.message
@@ -390,22 +454,19 @@ setPatientMappings({})
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
     }
-    if (annotationInputRef.current) {
-      annotationInputRef.current.value = ''
-    }
   }
 
   return (
     <div className="bulk-upload-container">
       <div className="card">
-        <h2>Bulk Upload Ảnh</h2>
-        <p style={{ color: '#666', marginBottom: '20px' }}>
+        <h2>Bulk Upload Ảnh RAW</h2>
+        <p style={{ color: 'var(--text-sub)', marginBottom: '20px' }}>
           Upload hàng loạt ảnh với tên file theo format: <code>Patient_XXXX_DD-MM-YYYY_Position.JPG</code>
         </p>
 
         {/* Upload Result */}
         {uploadResult && (
-          <div className={uploadResult.success ? 'success' : 'error'} style={{ marginBottom: '20px' }}>
+          <div className={uploadResult.success ? 'success' : 'error'}>
             {uploadResult.success ? (
               <>
                 <strong>✓ Upload thành công!</strong>
@@ -414,7 +475,7 @@ setPatientMappings({})
                   {uploadResult.data.imagesCreated} ảnh, và {uploadResult.data.annotationsCreated || 0} annotations.
                 </p>
                 {uploadResult.data.imagesWithoutAnnotations && uploadResult.data.imagesWithoutAnnotations.length > 0 && (
-                  <p style={{ color: '#ff9800', marginTop: '8px' }}>
+                  <p style={{ color: 'var(--warning)', marginTop: '8px' }}>
                     ⚠️ {uploadResult.data.imagesWithoutAnnotations.length} ảnh không có annotation
                   </p>
                 )}
@@ -428,18 +489,17 @@ setPatientMappings({})
           </div>
         )}
 
-        {/* Annotation File Upload Section */}
-        <div style={{ marginBottom: '20px', padding: '16px', background: '#fff3e0', borderRadius: '8px', border: '2px dashed #ff9800' }}>
-          <h3 style={{ marginBottom: '12px', color: '#f57c00', fontSize: '16px' }}>
-            📋 File Annotation (COCO JSON) - Bắt buộc
+        {/* Annotation File Status - Auto-detected from folder */}
+        {/* <div style={{ marginBottom: '20px', padding: '16px', background: annotationFile ? '#e8f5e9' : '#fff3e0', borderRadius: '8px', border: `2px dashed ${annotationFile ? '#4caf50' : '#ff9800'}` }}>
+          <h3 style={{ marginBottom: '12px', color: annotationFile ? '#2e7d32' : '#f57c00', fontSize: '16px' }}>
+            📋 File Annotation {annotationFile ? '✓ Đã phát hiện' : '⚠️ Chưa có'}
           </h3>
-          <input
-            ref={annotationInputRef}
-            type="file"
-            accept=".json,application/json"
-            onChange={handleAnnotationFileSelect}
-            style={{ marginBottom: '12px', width: '100%' }}
-          />
+          
+          {!annotationFile && (
+            <p style={{ fontSize: '13px', color: '#f57c00', marginTop: '0' }}>
+              Hệ thống sẽ tự động tìm file .json trong folder bạn upload. Đảm bảo folder chứa file annotation COCO JSON.
+            </p>
+          )}
           
           {annotationFile && (
             <div style={{ padding: '12px', background: '#fff', borderRadius: '4px', border: '1px solid #e0e0e0' }}>
@@ -464,8 +524,6 @@ setPatientMappings({})
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
                     <div> Tổng ảnh: <strong>{annotationPreview.totalImages}</strong></div>
                     <div> Tổng annotations: <strong>{annotationPreview.totalAnnotations}</strong></div>
-                    {/* <div> Trung bình: <strong>{annotationPreview.avgAnnotations}/ảnh</strong></div>
-                    <div> Loại: <strong>{annotationPreview.categories.length} categories</strong></div> */}
                   </div>
                   <div style={{ marginTop: '8px', fontSize: '11px', color: '#999' }}>
                     Categories: {annotationPreview.categories.slice(0, 8).join(', ')}
@@ -475,13 +533,7 @@ setPatientMappings({})
               )}
             </div>
           )}
-          
-          {!annotationFile && (
-            <p style={{ fontSize: '12px', color: '#f57c00', marginTop: '8px' }}>
-              ⚠️ File annotation COCO JSON là bắt buộc để lưu trữ bounding boxes của răng và mắc cài
-            </p>
-          )}
-        </div>
+        </div> */}
 
         {/* Drag and Drop Zone */}
         <div
@@ -495,8 +547,9 @@ setPatientMappings({})
           <input
             ref={fileInputRef}
             type="file"
+            webkitdirectory="true"
+            directory="true"
             multiple
-            accept="image/jpeg,image/jpg,image/png"
             onChange={handleFileSelect}
             style={{ display: 'none' }}
           />
@@ -508,16 +561,19 @@ setPatientMappings({})
             
             {files.length === 0 ? (
               <>
-                <h3>Kéo thả ảnh vào đây hoặc click để chọn</h3>
+                <h3>Kéo thả FOLDER vào đây hoặc click để chọn</h3>
                 <p style={{ color: '#666', marginTop: '10px' }}>
-                  Chấp nhận: JPG, JPEG, PNG
+                  Folder phải chứa: ảnh JPG/PNG + file annotation JSON
+                </p>
+                <p style={{ color: '#0369a1', marginTop: '8px', fontSize: '13px', fontWeight: '500' }}>
+                  📁 Hệ thống tự động tìm file annotation trong folder
                 </p>
               </>
             ) : (
               <>
-                <h3>Đã chọn {files.length} file</h3>
+                <h3>Đã chọn {files.length} ảnh</h3>
                 <p style={{ color: '#666', marginTop: '10px' }}>
-                  Click để chọn thêm hoặc kéo thả file khác
+                  Click để chọn folder khác
                 </p>
               </>
             )}
@@ -551,6 +607,16 @@ setPatientMappings({})
               const groupKey = `${group.patientId}_${group.visitDate}`
               const mapping = patientMappings[groupKey]
               const isEditing = editingGroup?.patientId === group.patientId && editingGroup?.visitDate === group.visitDate
+              
+              // Calculate missing positions
+              const expectedPositions = [
+                'upper_right', 'upper_center', 'upper_left',
+                'middle_right', 'middle_center', 'middle_left',
+                'lower_right', 'lower_center', 'lower_left'
+              ]
+              const uploadedPositions = group.images.map(img => img.position)
+              const missingCount = 9 - group.images.length
+              const hasMissing = missingCount > 0
 
               return (
                 <div key={idx} className="bulk-preview-card">
@@ -561,10 +627,25 @@ setPatientMappings({})
                     </span>
                   </div>
                   
+                  {/* Missing Images Warning */}
+                  {hasMissing && (
+                    <div style={{ 
+                      padding: '8px', 
+                      background: '#fff3cd', 
+                      border: '1px solid #ffc107',
+                      borderRadius: '4px',
+                      marginBottom: '10px',
+                      fontSize: '12px',
+                      color: '#856404'
+                    }}>
+                      ⚠️ Thiếu {missingCount}/9 ảnh
+                    </div>
+                  )}
+                  
                   {/* Images Preview */}
                   <div className="bulk-preview-images">
                     <p style={{ fontSize: '12px', color: '#666', marginBottom: '8px', fontWeight: '600' }}>
-                      {group.images.length} ảnh:
+                      {group.images.length}/9 ảnh:
                     </p>
                     <div className="image-list">
                       {(expandedGroups[groupKey] ? group.images : group.images.slice(0, 5)).map((img, i) => (

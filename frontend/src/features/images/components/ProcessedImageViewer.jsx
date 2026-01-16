@@ -1,7 +1,11 @@
 import { useState, useEffect } from 'react';
 import Button from '../../../components/ui/Button';
 import LoadingSpinner from '../../../components/ui/LoadingSpinner';
-import { FiUpload, FiX } from 'react-icons/fi';
+import { FiUpload, FiX, FiZoomIn, FiChevronLeft, FiChevronRight } from 'react-icons/fi';
+import AnnotationCanvas from '../../../components/AnnotationCanvas';
+import annotationService from '../../../services/annotationService';
+import { useAuth } from '../../auth/hooks/useAuth';
+import toast from 'react-hot-toast';
 
 const ProcessedImageViewer = ({ 
   visitId, 
@@ -15,7 +19,10 @@ const ProcessedImageViewer = ({
   const [viewMode, setViewMode] = useState('raw'); // 'raw' or 'processed'
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState(null);
-  const [lightboxImage, setLightboxImage] = useState(null); // { url, label, position, stainedUrl }
+  const [lightboxImage, setLightboxImage] = useState(null); // { url, label, position, stainedUrl, imageId, image }
+  const [annotations, setAnnotations] = useState([]); // teeth array with subboxes
+  const [annotationStats, setAnnotationStats] = useState(null);
+  const { user: currentUser, isAuthenticated } = useAuth();
 
   const hasProcessed = processedImages.some(img => img.url_processed);
   
@@ -33,6 +40,7 @@ const ProcessedImageViewer = ({
       console.log('Auto-switching to processed view');
       setViewMode('processed');
       setProcessing(false);
+      toast.success('Xử lý ảnh thành công!');
     }
   }, [hasProcessed, processing]);
   
@@ -66,20 +74,8 @@ const ProcessedImageViewer = ({
       return false;
     });
   };
-  
-  console.log('ProcessedImageViewer render:', {
-    viewMode,
-    displayImagesCount: displayImages.length,
-    hasProcessed,
-    processing,
-    sampleImage: displayImages[0]
-  });
 
   const handleProcessClick = async () => {
-    console.log('=== PROCESS BUTTON CLICKED ===');
-    console.log('Visit ID:', visitId);
-    console.log('Raw images count:', rawImages.length);
-    
     setProcessing(true);
     setError(null);
     
@@ -88,11 +84,143 @@ const ProcessedImageViewer = ({
       const result = await onProcessClick();
       console.log('onProcessClick result:', result);
     } catch (err) {
-      console.error('Process error:', err);
-      setError(err.message || 'Có lỗi xảy ra khi xử lý ảnh');
+      const errorMsg = err.message || 'Có lỗi xảy ra khi xử lý ảnh';
+      setError(errorMsg);
+      toast.error(errorMsg);
       setProcessing(false);
     }
   };
+
+  // Load annotations for an image
+  const loadAnnotationsForImage = async (imageId) => {
+    try {
+      console.log('🔍 Loading annotations for image:', imageId);
+      const result = await annotationService.getImageAnnotations(imageId);
+      console.log('✅ Annotations loaded:', result);
+      console.log('📊 Teeth count:', result.data?.teeth?.length);
+      console.log('📊 Progress:', result.data?.progress);
+      console.log('🦷 Full teeth structure:', JSON.stringify(result.data?.teeth, null, 2));
+      setAnnotations(result.data?.teeth || []);
+      // Ensure percentage is a number
+      const progress = result.data?.progress;
+      if (progress && typeof progress === 'object') {
+        setAnnotationStats({
+          ...progress,
+          percentage: parseFloat(progress.percentage) || 0
+        });
+      } else {
+        setAnnotationStats(null);
+      }
+    } catch (err) {
+      toast.error('Không thể tải annotations');
+      setAnnotations([]);
+      setAnnotationStats(null);
+    }
+  };
+
+  // Handle subbox click to toggle plaque status
+  const handleSubboxClick = async (subbox, tooth) => {
+    if (!isAuthenticated || !currentUser) {
+      toast.error('Vui lòng đăng nhập để sử dụng tính năng annotation');
+      return;
+    }
+
+    try {
+      // Toggle: flip between 0 and 1 (no plaque <-> has plaque)
+      const newStatus = subbox.plaque_status === 1 ? 0 : 1;
+      
+      await annotationService.updatePlaqueStatus(
+        subbox.subbox_id, 
+        newStatus, 
+        currentUser.id
+      );
+
+      toast.success(newStatus === 1 ? 'Đánh dấu có mảng bám' : 'Đánh dấu không có mảng bám');
+      
+      // Reload annotations to reflect change
+      if (lightboxImage?.imageId) {
+        await loadAnnotationsForImage(lightboxImage.imageId);
+      }
+    } catch (err) {
+      console.error('❌ Failed to update plaque status:', err);
+      alert('Có lỗi xảy ra khi cập nhật: ' + err.message);
+    }
+  };
+
+  // Navigate between images in lightbox
+  const navigateImage = (direction) => {
+    if (!lightboxImage) return;
+    
+    const positions = [
+      { index: 1, type: 'top_right', label: 'Top Right', altTypes: [] },
+      { index: 2, type: 'top_center', label: 'Top Center', altTypes: ['top_middle'] },
+      { index: 3, type: 'top_left', label: 'Top Left', altTypes: [] },
+      { index: 4, type: 'central_right', label: 'Central Right', altTypes: [] },
+      { index: 5, type: 'central_middle', label: 'Central Middle', altTypes: [] },
+      { index: 6, type: 'central_left', label: 'Central Left', altTypes: [] },
+      { index: 7, type: 'bottom_right', label: 'Bottom Right', altTypes: [] },
+      { index: 8, type: 'bottom_center', label: 'Bottom Center', altTypes: ['bottom_middle'] },
+      { index: 9, type: 'bottom_left', label: 'Bottom Left', altTypes: [] }
+    ];
+
+    const currentIndex = positions.findIndex(p => p.index === lightboxImage.position.index);
+    let nextIndex = currentIndex + direction;
+    
+    // Wrap around
+    if (nextIndex < 0) nextIndex = positions.length - 1;
+    if (nextIndex >= positions.length) nextIndex = 0;
+    
+    const nextPosition = positions[nextIndex];
+    
+    // Find next image
+    const nextImage = displayImages.find(img => {
+      if (img.image_index === nextPosition.index) return true;
+      const imgType = img.image_type?.toLowerCase() || '';
+      const posType = nextPosition.type.toLowerCase();
+      if (imgType.includes(posType)) return true;
+      if (nextPosition.altTypes) {
+        return nextPosition.altTypes.some(alt => imgType.includes(alt.toLowerCase()));
+      }
+      return false;
+    });
+
+    if (nextImage) {
+      const imageUrl = viewMode === 'processed' && nextImage.url_processed
+        ? nextImage.url_processed
+        : nextImage.url;
+      const stainedImage = findStainedImage(nextPosition);
+      
+      setLightboxImage({
+        url: imageUrl,
+        label: nextPosition.label,
+        position: nextPosition,
+        stainedUrl: stainedImage?.url,
+        imageId: nextImage.id,
+        image: nextImage
+      });
+
+      // Load annotations for new image
+      if (nextImage.id) {
+        loadAnnotationsForImage(nextImage.id);
+      }
+    }
+  };
+
+  // Keyboard navigation
+  useEffect(() => {
+    const handleKeyPress = (e) => {
+      if (!lightboxImage) return;
+      
+      if (e.key === 'ArrowLeft') {
+        navigateImage(-1);
+      } else if (e.key === 'ArrowRight') {
+        navigateImage(1);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyPress);
+    return () => window.removeEventListener('keydown', handleKeyPress);
+  }, [lightboxImage]);
 
   const renderGrid = () => {
     const positions = [
@@ -177,12 +305,27 @@ const ProcessedImageViewer = ({
                   onClick={(e) => {
                     e.stopPropagation();
                     const stainedImage = findStainedImage(pos);
+                    console.log('🖼️ Image clicked:', {
+                      imageId: image?.id,
+                      imageUrl: imageUrl,
+                      position: pos.label,
+                      hasStained: !!stainedImage
+                    });
                     setLightboxImage({ 
                       url: imageUrl, 
                       label: pos.label,
                       position: pos,
-                      stainedUrl: stainedImage?.url
+                      stainedUrl: stainedImage?.url,
+                      imageId: image?.id,
+                      image: image
                     });
+                    // Load annotations for this image
+                    if (image?.id) {
+                      console.log('📞 Calling loadAnnotationsForImage with ID:', image.id);
+                      loadAnnotationsForImage(image.id);
+                    } else {
+                      console.error('❌ No image ID available!', image);
+                    }
                   }}
                   onError={(e) => {
                     e.target.style.display = 'none';
@@ -336,6 +479,114 @@ const ProcessedImageViewer = ({
             {lightboxImage.label}
           </div>
 
+          {/* Annotation Stats */}
+          {viewMode === 'processed' && annotationStats && typeof annotationStats === 'object' && (
+            <div style={{
+              position: 'absolute',
+              top: '20px',
+              left: '20px',
+              background: 'rgba(0, 0, 0, 0.8)',
+              backdropFilter: 'blur(10px)',
+              color: 'white',
+              padding: '12px 16px',
+              borderRadius: '12px',
+              fontSize: '12px',
+              zIndex: 10000,
+              minWidth: '200px'
+            }}>
+              <div style={{ fontWeight: '600', marginBottom: '8px', fontSize: '13px' }}>
+                📊 Annotation Progress
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#94a3b8' }}>Total subbox:</span>
+                  <span style={{ fontWeight: '600' }}>{annotationStats.total}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#94a3b8' }}>No plaque:</span>
+                  <span style={{ fontWeight: '600', color: '#10b981' }}>{annotationStats.total - annotationStats.plaque_detected}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#94a3b8' }}>Has plaque:</span>
+                  <span style={{ fontWeight: '600', color: '#ef4444' }}>{annotationStats.plaque_detected}</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Navigation Buttons */}
+          <button
+            style={{
+              position: 'absolute',
+              top: '50%',
+              left: '20px',
+              transform: 'translateY(-50%)',
+              background: 'rgba(255, 255, 255, 0.2)',
+              backdropFilter: 'blur(10px)',
+              border: 'none',
+              color: 'white',
+              width: '48px',
+              height: '48px',
+              borderRadius: '50%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+              zIndex: 10000
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              navigateImage(-1);
+            }}
+            onMouseEnter={(e) => {
+              e.target.style.background = 'rgba(255, 255, 255, 0.3)';
+              e.target.style.transform = 'translateY(-50%) scale(1.1)';
+            }}
+            onMouseLeave={(e) => {
+              e.target.style.background = 'rgba(255, 255, 255, 0.2)';
+              e.target.style.transform = 'translateY(-50%) scale(1)';
+            }}
+          >
+            <FiChevronLeft size={28} />
+          </button>
+
+          <button
+            style={{
+              position: 'absolute',
+              top: '50%',
+              right: '20px',
+              transform: 'translateY(-50%)',
+              background: 'rgba(255, 255, 255, 0.2)',
+              backdropFilter: 'blur(10px)',
+              border: 'none',
+              color: 'white',
+              width: '48px',
+              height: '48px',
+              borderRadius: '50%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+              zIndex: 10000
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              navigateImage(1);
+            }}
+            onMouseEnter={(e) => {
+              e.target.style.background = 'rgba(255, 255, 255, 0.3)';
+              e.target.style.transform = 'translateY(-50%) scale(1.1)';
+            }}
+            onMouseLeave={(e) => {
+              e.target.style.background = 'rgba(255, 255, 255, 0.2)';
+              e.target.style.transform = 'translateY(-50%) scale(1)';
+            }}
+          >
+            <FiChevronRight size={28} />
+          </button>
+
           {/* Split Screen Container */}
           <div style={{
             flex: 1,
@@ -344,16 +595,20 @@ const ProcessedImageViewer = ({
             alignItems: 'center',
             justifyContent: 'center',
             marginTop: '60px',
-            marginBottom: '40px'
+            marginBottom: '40px',
+            minHeight: 0,
+            overflow: 'hidden'
           }}>
-            {/* Left: Raw/Processed */}
+            {/* Left: Raw/Processed với annotation overlay */}
             <div style={{
               flex: 1,
               height: '100%',
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
-              justifyContent: 'center'
+              justifyContent: 'center',
+              minHeight: 0,
+              minWidth: 0
             }}>
               <div style={{
                 background: 'rgba(255, 255, 255, 0.1)',
@@ -365,20 +620,32 @@ const ProcessedImageViewer = ({
                 fontWeight: '600',
                 marginBottom: '12px'
               }}>
-                {viewMode === 'processed' ? ' Processed' : ' Raw'}
+                {viewMode === 'processed' ? '🔍 Processed' : '📷 Raw'}
               </div>
-              <img 
-                src={lightboxImage.url}
-                alt={lightboxImage.label}
-                style={{
-                  maxWidth: '100%',
-                  maxHeight: '100%',
-                  objectFit: 'contain',
-                  borderRadius: '8px',
-                  boxShadow: '0 20px 60px rgba(0, 0, 0, 0.5)'
-                }}
-                onClick={(e) => e.stopPropagation()}
-              />
+              {(() => {
+                const shouldShowCanvas = viewMode === 'processed' && annotations.length > 0;
+                
+                return shouldShowCanvas ? (
+                  <AnnotationCanvas
+                    imageUrl={lightboxImage.url}
+                    teeth={annotations}
+                    onSubboxClick={handleSubboxClick}
+                  />
+                ) : (
+                  <img 
+                    src={lightboxImage.url}
+                    alt={lightboxImage.label}
+                    style={{
+                      maxWidth: '100%',
+                      maxHeight: '100%',
+                      objectFit: 'contain',
+                      borderRadius: '8px',
+                      boxShadow: '0 20px 60px rgba(0, 0, 0, 0.5)'
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                );
+              })()}
             </div>
 
             {/* Divider */}
@@ -395,7 +662,9 @@ const ProcessedImageViewer = ({
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
-              justifyContent: 'center'
+              justifyContent: 'center',
+              minHeight: 0,
+              minWidth: 0
             }}>
               <div style={{
                 background: 'rgba(147, 51, 234, 0.3)',
@@ -484,22 +753,32 @@ const ProcessedImageViewer = ({
           )}
           
           {hasProcessed && (
-            <div style={{ display: 'flex', gap: '4px' }}>
+            <>
               <Button
-                onClick={() => setViewMode('raw')}
-                variant={viewMode === 'raw' ? 'primary' : 'secondary'}
+                onClick={handleProcessClick}
+                disabled={processing}
+                variant="secondary"
                 size="small"
               >
-                 Raw
+                {processing ? '⏳ Đang xử lý lại...' : '🔄 Xử lý lại'}
               </Button>
-              <Button
-                onClick={() => setViewMode('processed')}
-                variant={viewMode === 'processed' ? 'primary' : 'secondary'}
-                size="small"
-              >
-                 Processed
-              </Button>
-            </div>
+              <div style={{ display: 'flex', gap: '4px' }}>
+                <Button
+                  onClick={() => setViewMode('raw')}
+                  variant={viewMode === 'raw' ? 'primary' : 'secondary'}
+                  size="small"
+                >
+                   Raw
+                </Button>
+                <Button
+                  onClick={() => setViewMode('processed')}
+                  variant={viewMode === 'processed' ? 'primary' : 'secondary'}
+                  size="small"
+                >
+                   Processed
+                </Button>
+              </div>
+            </>
           )}
         </div>
       </div>
@@ -516,6 +795,47 @@ const ProcessedImageViewer = ({
           borderRadius: '4px'
         }}>
           ⚠️ {error}
+        </div>
+      )}
+
+      {/* Warning when processed images are incomplete */}
+      {hasProcessed && processedImages.filter(img => img.url_processed).length < rawImages.length && !processing && (
+        <div style={{
+          padding: '8px 12px',
+          background: '#fff3cd',
+          color: '#856404',
+          margin: '8px',
+          borderLeft: '3px solid #ffc107',
+          fontSize: '11px',
+          fontWeight: '500',
+          borderRadius: '4px',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center'
+        }}>
+          <span>
+            ⚠️ Phát hiện thiếu ảnh đã xử lý ({processedImages.filter(img => img.url_processed).length}/{rawImages.length}). 
+            Có thể xảy ra lỗi trong quá trình xử lý.
+          </span>
+          <button
+            onClick={handleProcessClick}
+            disabled={processing}
+            style={{
+              padding: '4px 12px',
+              fontSize: '11px',
+              fontWeight: '600',
+              background: '#ffc107',
+              color: '#000',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap'
+            }}
+            onMouseEnter={(e) => e.target.style.background = '#ffb300'}
+            onMouseLeave={(e) => e.target.style.background = '#ffc107'}
+          >
+            🔄 Xử lý lại
+          </button>
         </div>
       )}
 

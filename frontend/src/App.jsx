@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { useAuth } from './features/auth/hooks/useAuth'
+import { Routes, Route, Navigate } from 'react-router-dom'
 import Login from './components/Login'
 import Sidebar from './components/Sidebar'
 import PatientList from './components/PatientList'
@@ -7,64 +7,44 @@ import PatientForm from './components/PatientForm'
 import VisitManager from './components/VisitManager'
 import ImageUpload from './components/ImageUpload'
 import BulkUpload from './components/BulkUpload'
+import StainedBulkUpload from './components/StainedBulkUpload'
+
 
 function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(false)
-  const [isLoading, setIsLoading] = useState(true)
+  const { isAuthenticated, logout, isLoggingIn } = useAuth();
 
-  useEffect(() => {
-    // Check if user is already logged in
-    const auth = localStorage.getItem('isAuthenticated')
-    setIsAuthenticated(auth === 'true')
-    setIsLoading(false)
-  }, [])
-
-  const handleLogin = () => {
-    setIsAuthenticated(true)
-  }
-
-  const handleLogout = () => {
-    localStorage.removeItem('isAuthenticated')
-    localStorage.removeItem('username')
-    setIsAuthenticated(false)
-  }
-
-  if (isLoading) {
-    return <div>Loading...</div>
+  if (isLoggingIn) {
+    return <div>Loading...</div>;
   }
 
   if (!isAuthenticated) {
     return (
-      <BrowserRouter>
-        <Routes>
-          <Route path="/login" element={<Login onLogin={handleLogin} />} />
-          <Route path="*" element={<Navigate to="/login" replace />} />
-        </Routes>
-      </BrowserRouter>
-    )
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="*" element={<Navigate to="/login" replace />} />
+      </Routes>
+    );
   }
 
   return (
-    <BrowserRouter>
-      <div className="app-layout">
-        <Sidebar onLogout={handleLogout} />
-        
-        <main className="main-container">
-          <div className="main-content">
-            <Routes>
-              <Route path="/" element={<Navigate to="/patients" replace />} />
-              <Route path="/patients" element={<PatientList />} />
-              <Route path="/patients/new" element={<PatientForm />} />
-              <Route path="/patients/:patientId/visits" element={<VisitManager />} />
-              <Route path="/visits/:visitId/images" element={<ImageUpload />} />
-              <Route path="/bulk-upload" element={<BulkUpload />} />
-              <Route path="*" element={<NotFound />} />
-            </Routes>
-          </div>
-        </main>
-      </div>
-    </BrowserRouter>
-  )
+    <div className="app-layout">
+      <Sidebar onLogout={logout} />
+      <main className="main-container">
+        <div className="main-content">
+          <Routes>
+            <Route path="/" element={<Navigate to="/patients" replace />} />
+            <Route path="/patients" element={<PatientList />} />
+            <Route path="/patients/new" element={<PatientForm />} />
+            <Route path="/patients/:patientId/visits" element={<VisitManager />} />
+            <Route path="/visits/:visitId/images" element={<ImageUpload />} />
+            <Route path="/bulk-upload" element={<BulkUpload />} />
+            <Route path="/bulk-upload/stained" element={<StainedBulkUpload />} />
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </div>
+      </main>
+    </div>
+  );
 }
 
 function NotFound() {

@@ -9,7 +9,7 @@ class AuthService {
    * Login with username and password
    */
   async login(credentials) {
-    const response = await apiClient.post('/auth/login', credentials);
+    const response = await apiClient.post('/api/auth/login', credentials);
     return response.data;
   }
 
@@ -24,7 +24,13 @@ class AuthService {
   /**
    * Logout user
    */
-  logout() {
+  async logout() {
+    try {
+      // Call server to clear cookie
+      await apiClient.post('/api/auth/logout');
+    } catch (err) {
+      console.warn('Logout request failed:', err?.message || err);
+    }
     // Clear local storage on logout
     localStorage.clear();
   }

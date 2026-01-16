@@ -1,52 +1,23 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { login } from '../api'
+import { useAuth } from '../features/auth/hooks/useAuth'
 import { FiEye, FiEyeOff, FiUser, FiLock } from 'react-icons/fi'
 import '../styles/Login.css'
 
-function Login({ onLogin }) {
+function Login() {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
+  const { login, isLoggingIn, loginError } = useAuth();
   const [error, setError] = useState('')
-  const [isLoading, setIsLoading] = useState(false)
-  const navigate = useNavigate()
 
-  const handleSubmit = async (e) => {
-    e.preventDefault()
-    setError('')
-    
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    setError('');
     if (!username || !password) {
-      setError('Vui lòng nhập đầy đủ thông tin')
-      return
+      setError('Vui lòng nhập đầy đủ thông tin');
+      return;
     }
-
-    setIsLoading(true)
-    
-    try {
-      const response = await login({ username, password })
-      
-      if (response.data.success) {
-        const { user } = response.data.data
-        localStorage.setItem('isAuthenticated', 'true')
-        localStorage.setItem('username', user.username)
-        localStorage.setItem('userId', user.id)
-        localStorage.setItem('userRole', user.role)
-        onLogin()
-        navigate('/')
-      } else {
-        setError(response.data.message || 'Đăng nhập thất bại')
-      }
-    } catch (err) {
-      console.error('Login error:', err)
-      if (err.response?.data?.message) {
-        setError(err.response.data.message)
-      } else {
-        setError('Đã xảy ra lỗi. Vui lòng thử lại.')
-      }
-    } finally {
-      setIsLoading(false)
-    }
+    login({ username, password });
   }
 
   return (
@@ -58,9 +29,9 @@ function Login({ onLogin }) {
         </div>
 
         <form onSubmit={handleSubmit} className="login-form">
-          {error && (
+          {(error || loginError) && (
             <div className="error-message">
-              {error}
+              {error || (loginError?.message || 'Đăng nhập thất bại')}
             </div>
           )}
 
@@ -73,7 +44,7 @@ function Login({ onLogin }) {
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 placeholder="Nhập tên đăng nhập"
-                disabled={isLoading}
+                  disabled={isLoggingIn}
                 autoFocus
                 autoComplete="username"
               />
@@ -89,14 +60,14 @@ function Login({ onLogin }) {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="Nhập mật khẩu"
-                disabled={isLoading}
+                disabled={isLoggingIn}
                 autoComplete="current-password"
               />
               <button
                 type="button"
                 className="password-toggle"
                 onClick={() => setShowPassword(!showPassword)}
-                disabled={isLoading}
+                disabled={isLoggingIn}
                 tabIndex={-1}
                 aria-label={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
               >
@@ -104,13 +75,12 @@ function Login({ onLogin }) {
               </button>
             </div>
           </div>
-
+          
           <button 
-            type="submit" 
             className="login-button"
-            disabled={isLoading}
+            disabled={isLoggingIn}
           >
-            {isLoading ? 'Đang đăng nhập...' : 'Đăng nhập'}
+            {isLoggingIn ? 'Đang đăng nhập...' : 'Đăng nhập'}
           </button>
         </form>
 

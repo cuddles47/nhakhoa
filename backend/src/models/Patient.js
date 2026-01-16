@@ -10,7 +10,12 @@ class Patient {
         let paramIndex = 1;
         
         if (search) {
-            whereConditions.push(`(name ILIKE $${paramIndex} OR phone ILIKE $${paramIndex})`);
+            whereConditions.push(`(
+                name ILIKE $${paramIndex} OR 
+                phone ILIKE $${paramIndex} OR 
+                CAST(id AS TEXT) ILIKE $${paramIndex} OR 
+                COALESCE(notes, '') ILIKE $${paramIndex}
+            )`);
             params.push(`%${search}%`);
             paramIndex++;
         }

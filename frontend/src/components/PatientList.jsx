@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { getPatients, searchPatients, deletePatient } from '../api'
 import PatientForm from './PatientForm'
+import toast from 'react-hot-toast';
 import { FiPlus, FiSearch, FiEye, FiTrash2, FiChevronLeft, FiChevronRight, FiChevronsLeft, FiChevronsRight, FiX } from 'react-icons/fi'
 
 function PatientList() {
@@ -41,7 +42,7 @@ function PatientList() {
       setError(null)
     } catch (err) {
       setError('Không thể tải danh sách bệnh nhân')
-      console.error(err)
+      toast.error(err.message || 'Lỗi khi tải bệnh nhân');
     } finally {
       setLoading(false)
     }
@@ -68,7 +69,7 @@ function PatientList() {
       await deletePatient(id)
       loadPatients()
     } catch (err) {
-      alert('Không thể xóa bệnh nhân')
+      toast.error('Không thể xóa bệnh nhân');
     }
   }
 

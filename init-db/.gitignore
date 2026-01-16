@@ -1,0 +1,18 @@
+# Ignore backup files
+*.sql.backup
+*.sql.bak
+*_backup.sql
+backup_*.sql
+dev_*.sql
+
+# Ignore exported schemas (generated files)
+schema_export.sql
+
+# Ignore node modules if bcrypt is installed
+node_modules/
+package-lock.json
+
+# Ignore environment-specific password files
+passwords.txt
+secrets.txt
+.env.local

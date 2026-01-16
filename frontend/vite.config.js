@@ -8,6 +8,10 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 4004,
       host: '0.0.0.0', // Allow external connections
+      hmr: {
+        port: 4004,
+        host: '192.168.88.69'  // Use the external IP for HMR WebSocket
+      },
       proxy: {
         '/api': {
           target: env.VITE_API_URL, 

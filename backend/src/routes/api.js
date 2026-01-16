@@ -7,6 +7,7 @@ const visitController = require('../controllers/VisitController');
 const imageController = require('../controllers/ImageController');
 const bulkUploadController = require('../controllers/BulkUploadController');
 const imageProcessingController = require('../controllers/ImageProcessingController');
+const annotationController = require('../controllers/AnnotationController');
 const indexController = require('../controllers/index');
 const validate = require('../middleware/validate');
 const patientSchemas = require('../validators/patientValidator');
@@ -29,7 +30,9 @@ router.get('/api/status', indexController.getStatus);
 
 // Auth routes
 router.post('/api/auth/login', authController.login);
+router.post('/api/auth/logout', authController.logout);
 router.get('/api/auth/profile', authController.getProfile);
+router.post('/api/auth/refresh', authController.refreshToken);
 
 // User routes
 router.get('/api/users', userController.getAllUsers);
@@ -70,9 +73,20 @@ router.post('/api/bulk-upload', upload.fields([
 ]), bulkUploadController.bulkUpload);
 router.get('/api/bulk-upload/history', bulkUploadController.getUploadHistory);
 
+// Stained bulk upload routes
+router.post('/api/bulk-upload/stained', upload.array('images', 20), bulkUploadController.uploadStainedImages);
+router.get('/api/visits/:visitId/stained-upload-status', bulkUploadController.getStainedUploadStatus);
+router.get('/api/patients/:patientId/available-visits', bulkUploadController.getAvailableVisitsForStained);
+
 // Image processing routes
 router.post('/api/visits/:visitId/process-images', imageProcessingController.processRawImages);
 router.get('/api/visits/:visitId/processing-status', imageProcessingController.getProcessingStatus);
+
+// Annotation routes
+router.get('/api/images/:imageId/annotations', annotationController.getImageAnnotations);
+router.put('/api/annotations/:annotationId/plaque', annotationController.updatePlaqueStatus);
+router.post('/api/images/:imageId/annotations/batch', annotationController.batchUpdateAnnotations);
+router.get('/api/visits/:visitId/annotations/stats', annotationController.getVisitStats);
 
 // Proxy route for MinIO images (to avoid CORS issues)
 router.get('/api/images/proxy/*', async (req, res) => {
