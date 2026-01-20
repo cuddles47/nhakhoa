@@ -161,15 +161,15 @@ const ProcessedImageViewer = ({
     if (!lightboxImage) return;
     
     const positions = [
-      { index: 1, type: 'top_right', label: 'Top Right', altTypes: [] },
-      { index: 2, type: 'top_center', label: 'Top Center', altTypes: ['top_middle'] },
-      { index: 3, type: 'top_left', label: 'Top Left', altTypes: [] },
-      { index: 4, type: 'central_right', label: 'Central Right', altTypes: [] },
-      { index: 5, type: 'central_middle', label: 'Central Middle', altTypes: [] },
-      { index: 6, type: 'central_left', label: 'Central Left', altTypes: [] },
-      { index: 7, type: 'bottom_right', label: 'Bottom Right', altTypes: [] },
-      { index: 8, type: 'bottom_center', label: 'Bottom Center', altTypes: ['bottom_middle'] },
-      { index: 9, type: 'bottom_left', label: 'Bottom Left', altTypes: [] }
+      { index: 1, type: 'upper_right', label: 'Upper Right', altTypes: ['top_right'] },
+      { index: 2, type: 'upper_middle', label: 'Upper Middle', altTypes: ['upper_center', 'top_middle'] },
+      { index: 3, type: 'upper_left', label: 'Upper Left', altTypes: ['top_left'] },
+      { index: 4, type: 'middle_right', label: 'Middle Right', altTypes: ['central_right'] },
+      { index: 5, type: 'middle_middle', label: 'Middle Middle', altTypes: ['central_middle'] },
+      { index: 6, type: 'middle_left', label: 'Middle Left', altTypes: ['central_left'] },
+      { index: 7, type: 'lower_right', label: 'Lower Right', altTypes: ['bottom_right'] },
+      { index: 8, type: 'lower_middle', label: 'Lower Middle', altTypes: ['lower_center', 'bottom_middle'] },
+      { index: 9, type: 'lower_left', label: 'Lower Left', altTypes: ['bottom_left'] }
     ];
 
     const currentIndex = positions.findIndex(p => p.index === lightboxImage.position.index);
@@ -233,15 +233,15 @@ const ProcessedImageViewer = ({
 
   const renderGrid = () => {
     const positions = [
-      { index: 1, type: 'top_right', label: 'Top Right', altTypes: [] },
-      { index: 2, type: 'top_center', label: 'Top Center', altTypes: ['top_middle'] },
-      { index: 3, type: 'top_left', label: 'Top Left', altTypes: [] },
-      { index: 4, type: 'central_right', label: 'Central Right', altTypes: [] },
-      { index: 5, type: 'central_middle', label: 'Central Middle', altTypes: [] },
-      { index: 6, type: 'central_left', label: 'Central Left', altTypes: [] },
-      { index: 7, type: 'bottom_right', label: 'Bottom Right', altTypes: [] },
-      { index: 8, type: 'bottom_center', label: 'Bottom Center', altTypes: ['bottom_middle'] },
-      { index: 9, type: 'bottom_left', label: 'Bottom Left', altTypes: [] }
+      { index: 1, type: 'upper_right', label: 'Upper Right', altTypes: ['top_right'] },
+      { index: 2, type: 'upper_middle', label: 'Upper Middle', altTypes: ['upper_center', 'top_middle'] },
+      { index: 3, type: 'upper_left', label: 'Upper Left', altTypes: ['top_left'] },
+      { index: 4, type: 'middle_right', label: 'Middle Right', altTypes: ['central_right'] },
+      { index: 5, type: 'middle_middle', label: 'Middle Middle', altTypes: ['central_middle'] },
+      { index: 6, type: 'middle_left', label: 'Middle Left', altTypes: ['central_left'] },
+      { index: 7, type: 'lower_right', label: 'Lower Right', altTypes: ['bottom_right'] },
+      { index: 8, type: 'lower_middle', label: 'Lower Middle', altTypes: ['lower_center', 'bottom_middle'] },
+      { index: 9, type: 'lower_left', label: 'Lower Left', altTypes: ['bottom_left'] }
     ];
 
     return positions.map((pos) => {

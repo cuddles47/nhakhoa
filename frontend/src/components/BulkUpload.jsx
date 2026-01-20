@@ -8,6 +8,7 @@ function BulkUpload() {
   const [isDragging, setIsDragging] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [uploadResult, setUploadResult] = useState(null)
+  const [uploadProgress, setUploadProgress] = useState(0)
   const fileInputRef = useRef(null)
   
   // Annotation file state
@@ -37,7 +38,7 @@ function BulkUpload() {
     })
   }
 
-  // Parse filename: Patient_0061_28-10-2025_Bottom-left_JPG.rf.2a1880e537881d1577af1f9ba997076f
+  // Parse filename: Patient_0127_26-11-2025_Bottom-left_JPG.rf.c26f53735acf4f0b26dd6ed747ed87f7.jpg
   const parseFilename = (filename) => {
     // Match pattern: Patient_XXXX_DD-MM-YYYY_Position_JPG.rf.hash or Patient_XXXX_DD-MM-YYYY_Position.JPG
     const regex = /Patient_(\d+)_(\d{2})-(\d{2})-(\d{4})_(.+?)(?:_(?:JPG|PNG|jpg|png))?(?:\.rf\.[a-f0-9]+|\.(jpg|jpeg|png|JPG|JPEG|PNG))$/i
@@ -48,10 +49,23 @@ function BulkUpload() {
     }
     
     const [, patientId, day, month, year, position] = match
+    
+    // Normalize position: convert filename format to internal format
+    // Top -> upper, Central -> middle, Bottom -> lower
+    // left -> left, middle -> center, right -> right
+    let normalizedPosition = position.toLowerCase().replace(/-/g, '_')
+    normalizedPosition = normalizedPosition
+      .replace(/^top_/, 'upper_')
+      .replace(/^central_/, 'middle_')
+      .replace(/^bottom_/, 'lower_')
+      .replace(/_middle$/, '_center')
+    
+    console.log(`📸 Parsed ${filename}: position="${position}" -> normalized="${normalizedPosition}"`)
+    
     return {
       patientId: patientId.padStart(4, '0'),
       visitDate: `${year}-${month}-${day}`,
-      position: position.toLowerCase().replace(/-/g, '_'),
+      position: normalizedPosition,
       filename,
       ext: 'jpg' // Default to jpg since format is complex
     }
@@ -418,10 +432,12 @@ function BulkUpload() {
 
     parsedData.forEach(group => {
       const uploadedPositions = group.images.map(img => img.position)
+      console.log(`🔍 Patient ${group.patientId}: Uploaded positions:`, uploadedPositions)
       const missingPositions = expectedPositions.filter(pos => !uploadedPositions.includes(pos))
       
       if (missingPositions.length > 0) {
         const missingLabels = missingPositions.map(pos => positionLabels[pos] || pos)
+        console.log(`⚠️ Patient ${group.patientId}: Missing ${missingPositions.length} positions:`, missingPositions)
         missingReport.push({
           patientId: group.patientId,
           visitDate: group.visitDate,
@@ -482,6 +498,7 @@ function BulkUpload() {
     try {
       setUploading(true)
       setUploadResult(null)
+      setUploadProgress(0)
 
       const formData = new FormData()
       
@@ -506,12 +523,23 @@ function BulkUpload() {
 
       // Add metadata
       formData.append('metadata', JSON.stringify(enrichedMetadata))
+
+      // Calculate FormData size (approximate)
+      const totalSize = files.reduce((sum, file) => sum + file.size, 0) + annotationFile.size
+      console.log(`📦 Uploading ${files.length} images (${(totalSize / 1024 / 1024).toFixed(2)} MB)`)
+      
+      toast.loading(`📤 Đang upload ${files.length} ảnh (${(totalSize / 1024 / 1024).toFixed(2)} MB)...`, { id: 'bulk-upload' })
     
-      const response = await bulkUploadImages(formData)
+      const response = await bulkUploadImages(formData, (progressEvent) => {
+        const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total)
+        setUploadProgress(progress)
+        console.log(`Upload progress: ${progress}%`)
+      })
       
       const resultData = response.data.data
       
-      // Show success toast
+      // Dismiss loading toast and show success
+      toast.dismiss('bulk-upload')
       toast.success(
         `✓ Upload thành công! \n` +
         `Bệnh nhân: ${resultData.patientsCreated} mới, ` +
@@ -545,8 +573,22 @@ function BulkUpload() {
       setSearchResults([])
       
     } catch (error) {
-      const errorMsg = error.response?.data?.error || error.message
-      toast.error(`❌ Upload thất bại: ${errorMsg}`, { duration: 8000 })
+      console.error('Upload error:', error)
+      
+      // Dismiss loading toast
+      toast.dismiss('bulk-upload')
+      
+      let errorMsg = error.message
+      
+      if (error.code === 'ECONNABORTED') {
+        errorMsg = 'Request timeout - file quá lớn hoặc mạng chậm'
+      } else if (error.response) {
+        errorMsg = error.response.data?.error || `Server error: ${error.response.status}`
+      } else if (error.request) {
+        errorMsg = 'Không nhận được phản hồi từ server - kiểm tra kết nối mạng'
+      }
+      
+      toast.error(`❌ Upload thất bại: ${errorMsg}`, { duration: 10000 })
       
       setUploadResult({
         success: false,
@@ -554,6 +596,7 @@ function BulkUpload() {
       })
     } finally {
       setUploading(false)
+      setUploadProgress(0)
     }
   }
 
@@ -1025,7 +1068,7 @@ function BulkUpload() {
                   cursor: (uploading || Object.keys(patientMappings).length < parsedData.length) ? 'not-allowed' : 'pointer'
                 }}
               >
-                {uploading ? '⏳ Đang xử lý...' : `🚀 Xác nhận và Upload ${parsedData.length} nhóm`}
+                {uploading ? `⏳ Đang xử lý... ${uploadProgress}%` : `🚀 Xác nhận và Upload ${parsedData.length} nhóm`}
               </button>
               <button
                 className="button-secondary button"
@@ -1198,7 +1241,7 @@ function BulkUpload() {
                   cursor: uploading ? 'not-allowed' : 'pointer'
                 }}
               >
-                {uploading ? '⏳ Đang xử lý...' : '✓ Xác Nhận Upload'}
+                {uploading ? `⏳ Đang xử lý... ${uploadProgress}%` : '✓ Xác Nhận Upload'}
               </button>
               <button
                 className="button-secondary button"

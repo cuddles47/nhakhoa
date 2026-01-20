@@ -20,13 +20,33 @@ class BulkUploadController {
             // Parse metadata
             const metadata = JSON.parse(req.body.metadata || '[]');
             
+            // When using upload.any(), req.files is an array
             // When using upload.fields(), req.files is an object with field names as keys
-            let imageFiles = req.files?.images || [];
-            const annotationFiles = req.files?.annotationFile || [];
-            let annotationFile = annotationFiles[0];
+            // Support both formats for flexibility
+            let imageFiles = [];
+            let annotationFile = null;
+            const archiveFiles = [];
+
+            if (Array.isArray(req.files)) {
+                // upload.any() format - req.files is an array
+                for (const file of req.files) {
+                    if (file.fieldname === 'images') {
+                        imageFiles.push(file);
+                    } else if (file.fieldname === 'annotationFile') {
+                        annotationFile = file;
+                    } else if (file.fieldname === 'archive') {
+                        archiveFiles.push(file);
+                    }
+                }
+            } else if (req.files) {
+                // upload.fields() format - req.files is an object
+                imageFiles = req.files.images || [];
+                const annotationFiles = req.files.annotationFile || [];
+                annotationFile = annotationFiles[0];
+                archiveFiles.push(...(req.files.archive || []));
+            }
 
             // If an archive (zip) was uploaded, extract it to disk and add files to `imageFiles` (use disk paths to avoid memory pressure)
-            const archiveFiles = req.files?.archive || [];
             const path = require('path');
             const fs = require('fs');
             const { extractZipToDir, listFilesRecursively, cleanupDir } = require('../utils/zipHandler');

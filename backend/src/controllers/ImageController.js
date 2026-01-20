@@ -17,27 +17,9 @@ class ImageController {
             const { visitId } = req.params;
             const images = await Image.findByVisitId(visitId);
             
-            // Generate presigned URLs for all images
-            const storageService = require('../services/storage');
-            const imagesWithUrls = await Promise.all(
-                images.map(async (image) => {
-                    // Skip if no URL
-                    if (!image.url) {
-                        return image;
-                    }
-                    
-                    // Extract object name from url (remove bucket prefix)
-                    const objectName = image.url.replace(/^\/[^/]+\//, '');
-                    const presignedResult = await storageService.getPresignedUrl(objectName, 3600); // 1 hour expiry
-                    
-                    return {
-                        ...image,
-                        url: presignedResult.success ? presignedResult.url : image.url
-                    };
-                })
-            );
-            
-            res.json({ success: true, data: imagesWithUrls });
+            // Don't generate presigned URLs - let frontend use proxy
+            // The proxy endpoint /api/images/proxy/* will handle MinIO access
+            res.json({ success: true, data: images });
         } catch (error) {
             console.error('Error fetching images:', error);
             res.status(500).json({ success: false, error: error.message });
@@ -56,6 +38,8 @@ class ImageController {
             }
             
             const images = await Image.findByCategory(visitId, category);
+            
+            // Don't generate presigned URLs - let frontend use proxy
             res.json({ success: true, data: images });
         } catch (error) {
             console.error('Error fetching images:', error);

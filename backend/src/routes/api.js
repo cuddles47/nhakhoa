@@ -20,9 +20,18 @@ const upload = multer({
     storage: multer.memoryStorage(),
     limits: {
         fileSize: 50 * 1024 * 1024, // 50MB per file
-        files: 500 // Max 500 files
+        files: 2000 // Max 2000 files
     }
 });
+
+// Special multer configuration for bulk upload that allows any fields
+const bulkUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+        fileSize: 50 * 1024 * 1024, // 50MB per file
+        files: 2000 // Max 2000 files
+    }
+}).any(); // Accept any file fields
 
 // Root routes
 router.get('/', indexController.getHello);
@@ -67,11 +76,7 @@ router.put('/api/images/:id/validation', validate(imageSchemas.updateValidation)
 router.delete('/api/images/:id', imageController.deleteImage);
 
 // Bulk upload routes
-router.post('/api/bulk-upload', upload.fields([
-    { name: 'images', maxCount: 500 },
-    { name: 'annotationFile', maxCount: 1 },
-    { name: 'archive', maxCount: 1 }
-]), bulkUploadController.bulkUpload);
+router.post('/api/bulk-upload', bulkUpload, bulkUploadController.bulkUpload);
 router.get('/api/bulk-upload/history', bulkUploadController.getUploadHistory);
 
 // Stained bulk upload routes

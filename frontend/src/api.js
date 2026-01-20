@@ -63,11 +63,13 @@ export const updateImageValidation = (id, status) => api.put(`/images/${id}/vali
 export const deleteImage = (id) => api.delete(`/images/${id}`);
 
 // Bulk Upload
-export const bulkUploadImages = (formData) => {
+export const bulkUploadImages = (formData, onUploadProgress) => {
   return api.post('/bulk-upload', formData, {
     headers: {
       'Content-Type': 'multipart/form-data',
     },
+    timeout: 600000, // 10 minutes for large uploads
+    onUploadProgress: onUploadProgress,
   });
 };
 export const getBulkUploadHistory = () => api.get('/bulk-upload/history');
