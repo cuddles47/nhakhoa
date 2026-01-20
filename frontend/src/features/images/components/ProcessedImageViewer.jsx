@@ -36,13 +36,12 @@ const ProcessedImageViewer = ({
       rawImagesCount: rawImages.length
     });
     
-    if (hasProcessed && processing) {
+    // Auto-switch to processed view when images are available (no longer managing processing state here)
+    if (hasProcessed && !processing && viewMode === 'raw') {
       console.log('Auto-switching to processed view');
       setViewMode('processed');
-      setProcessing(false);
-      toast.success('Xử lý ảnh thành công!');
     }
-  }, [hasProcessed, processing]);
+  }, [hasProcessed, processing, viewMode]);
   
   const displayImages = viewMode === 'processed' ? processedImages : rawImages;
 
@@ -83,10 +82,20 @@ const ProcessedImageViewer = ({
       console.log('Calling onProcessClick...');
       const result = await onProcessClick();
       console.log('onProcessClick result:', result);
+      
+      // Only set processing to false after receiving result
+      if (result && result.success) {
+        toast.success(result.message || 'Xử lý ảnh thành công!');
+        setViewMode('processed');
+      } else {
+        throw new Error(result?.message || 'Xử lý không thành công');
+      }
     } catch (err) {
       const errorMsg = err.message || 'Có lỗi xảy ra khi xử lý ảnh';
       setError(errorMsg);
       toast.error(errorMsg);
+    } finally {
+      // Always set processing to false when done
       setProcessing(false);
     }
   };

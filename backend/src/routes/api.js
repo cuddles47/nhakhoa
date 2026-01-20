@@ -19,8 +19,8 @@ const multer = require('multer');
 const upload = multer({ 
     storage: multer.memoryStorage(),
     limits: {
-        fileSize: 10 * 1024 * 1024, // 10MB per file
-        files: 99 // Max 99 files
+        fileSize: 50 * 1024 * 1024, // 50MB per file
+        files: 500 // Max 500 files
     }
 });
 
@@ -68,8 +68,9 @@ router.delete('/api/images/:id', imageController.deleteImage);
 
 // Bulk upload routes
 router.post('/api/bulk-upload', upload.fields([
-    { name: 'images', maxCount: 100 },
-    { name: 'annotationFile', maxCount: 1 }
+    { name: 'images', maxCount: 500 },
+    { name: 'annotationFile', maxCount: 1 },
+    { name: 'archive', maxCount: 1 }
 ]), bulkUploadController.bulkUpload);
 router.get('/api/bulk-upload/history', bulkUploadController.getUploadHistory);
 

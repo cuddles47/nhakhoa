@@ -329,15 +329,35 @@ class BulkUploadController {
             // Commit transaction
             await client.query('COMMIT');
 
+            // Build detailed patient summary
+            const patientSummary = createdPatients.map((patient, idx) => ({
+                id: patient.id,
+                name: patient.name,
+                patientId: metadata[idx]?.patientId,
+                type: metadata[idx]?.patientMapping?.type,
+                imagesCount: createdVisits[idx] ? 
+                    createdImages.filter(img => img.visit_id === createdVisits[idx].id).length : 0
+            }));
+
+            // Build success message
+            const summaryParts = [];
+            if (patientsCreated > 0) summaryParts.push(`${patientsCreated} bệnh nhân mới`);
+            if (visitsCreated > 0) summaryParts.push(`${visitsCreated} lần khám`);
+            if (imagesCreated > 0) summaryParts.push(`${imagesCreated} ảnh`);
+            if (annotationsCreated > 0) summaryParts.push(`${annotationsCreated} annotations`);
+            
+            const successMessage = `Upload thành công: ${summaryParts.join(', ')}`;
+
             res.status(201).json({
                 success: true,
-                message: 'Bulk upload completed successfully',
+                message: successMessage,
                 data: {
                     patientsCreated,
                     visitsCreated,
                     imagesCreated,
                     annotationsCreated,
                     imagesWithoutAnnotations: imagesWithoutAnnotations.length > 0 ? imagesWithoutAnnotations : undefined,
+                    patientSummary,
                     patients: createdPatients,
                     visits: createdVisits,
                     images: createdImages
@@ -348,9 +368,24 @@ class BulkUploadController {
             // Rollback transaction on error
             await client.query('ROLLBACK');
             console.error('Bulk upload error:', error);
+            
+            // Provide more detailed error message
+            let errorMessage = 'Upload thất bại';
+            if (error.message.includes('annotation')) {
+                errorMessage = `Lỗi xử lý annotations: ${error.message}`;
+            } else if (error.message.includes('patient')) {
+                errorMessage = `Lỗi tạo bệnh nhân: ${error.message}`;
+            } else if (error.message.includes('visit')) {
+                errorMessage = `Lỗi tạo lần khám: ${error.message}`;
+            } else if (error.message.includes('upload') || error.message.includes('storage')) {
+                errorMessage = `Lỗi upload ảnh: ${error.message}`;
+            } else {
+                errorMessage = error.message || 'Lỗi không xác định';
+            }
+            
             res.status(500).json({ 
                 success: false, 
-                error: error.message || 'Bulk upload failed'
+                error: errorMessage
             });
         } finally {
             // Clean up extracted archive files if any

@@ -20,6 +20,8 @@ function BulkUpload() {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState([])
   const [expandedGroups, setExpandedGroups] = useState({}) // Track which groups are expanded
+  const [showValidationModal, setShowValidationModal] = useState(false)
+  const [validationSummary, setValidationSummary] = useState(null)
   const [newPatientForm, setNewPatientForm] = useState({
     name: '',
     phone: '',
@@ -208,6 +210,70 @@ function BulkUpload() {
     
     // Reset patient mappings when new files are loaded
     setPatientMappings({})
+    
+    // Auto-assign patients based on patient ID
+    if (groupedArray.length > 0) {
+      await autoAssignPatients(groupedArray)
+    }
+  }
+
+  const autoAssignPatients = async (groupedData) => {
+    const newMappings = {}
+    
+    for (const group of groupedData) {
+      const groupKey = `${group.patientId}_${group.visitDate}`
+      
+      try {
+        // Search for patient by ID in notes field
+        const response = await getPatients(`?search=Patient ID: ${group.patientId}&limit=50`)
+        const matchedPatients = response.data.data || []
+        
+        // Filter to exact matches in notes field
+        const exactMatches = matchedPatients.filter(p => 
+          p.notes && p.notes.includes(`Patient ID: ${group.patientId}`)
+        )
+        
+        if (exactMatches.length === 1) {
+          // Single match found - auto-assign
+          newMappings[groupKey] = {
+            type: 'existing',
+            patient: exactMatches[0],
+            patientId: group.patientId,
+            visitDate: group.visitDate
+          }
+        } else if (exactMatches.length === 0) {
+          // No match - suggest new patient creation
+          newMappings[groupKey] = {
+            type: 'new',
+            patient: {
+              name: `Bệnh Nhân #${group.patientId}`,
+              phone: '',
+              dob: '',
+              gender: 'unknown',
+              notes: `Patient ID: ${group.patientId}`
+            },
+            patientId: group.patientId,
+            visitDate: group.visitDate
+          }
+        }
+        // If multiple matches, leave unassigned for manual selection
+      } catch (error) {
+        console.error(`Error auto-assigning patient ${group.patientId}:`, error)
+      }
+    }
+    
+    if (Object.keys(newMappings).length > 0) {
+      setPatientMappings(newMappings)
+      const autoAssignedCount = Object.values(newMappings).filter(m => m.type === 'existing').length
+      const autoCreateCount = Object.values(newMappings).filter(m => m.type === 'new').length
+      
+      if (autoAssignedCount > 0 || autoCreateCount > 0) {
+        toast.success(
+          `✓ Tự động gán: ${autoAssignedCount} bệnh nhân có sẵn, ${autoCreateCount} bệnh nhân mới`,
+          { duration: 5000 }
+        )
+      }
+    }
   }
 
   const handleSearchPatient = async (query) => {
@@ -329,6 +395,46 @@ function BulkUpload() {
     fileInputRef.current?.click()
   }
 
+  const generateValidationSummary = () => {
+    const expectedPositions = [
+      'upper_right', 'upper_center', 'upper_left',
+      'middle_right', 'middle_center', 'middle_left',
+      'lower_right', 'lower_center', 'lower_left'
+    ]
+
+    const positionLabels = {
+      'upper_right': 'Trên phải',
+      'upper_center': 'Trên giữa',
+      'upper_left': 'Trên trái',
+      'middle_right': 'Giữa phải',
+      'middle_center': 'Giữa',
+      'middle_left': 'Giữa trái',
+      'lower_right': 'Dưới phải',
+      'lower_center': 'Dưới giữa',
+      'lower_left': 'Dưới trái'
+    }
+
+    const missingReport = []
+
+    parsedData.forEach(group => {
+      const uploadedPositions = group.images.map(img => img.position)
+      const missingPositions = expectedPositions.filter(pos => !uploadedPositions.includes(pos))
+      
+      if (missingPositions.length > 0) {
+        const missingLabels = missingPositions.map(pos => positionLabels[pos] || pos)
+        missingReport.push({
+          patientId: group.patientId,
+          visitDate: group.visitDate,
+          totalImages: group.images.length,
+          missingCount: missingPositions.length,
+          missingPositions: missingLabels
+        })
+      }
+    })
+
+    return missingReport
+  }
+
   const handleUpload = async () => {
     if (parsedData.length === 0) {
       toast.error('Không có file nào để upload');
@@ -348,26 +454,30 @@ function BulkUpload() {
     })
 
     if (unmappedGroups.length > 0) {
-      alert(`Vui lòng chọn/tạo bệnh nhân cho ${unmappedGroups.length} nhóm chưa được gán!`)
+      toast.error(`Vui lòng chọn/tạo bệnh nhân cho ${unmappedGroups.length} nhóm chưa được gán!`)
       return
     }
 
-    // Confirm before uploading
+    // Generate validation summary for missing images
+    const missingReport = generateValidationSummary()
     const totalImages = parsedData.reduce((sum, group) => sum + group.images.length, 0)
     const newPatientsCount = Object.values(patientMappings).filter(m => m.type === 'new').length
     const existingPatientsCount = Object.values(patientMappings).filter(m => m.type === 'existing').length
     
-    const confirmed = window.confirm(
-      `Bạn sắp:\n` +
-      `- Tạo ${newPatientsCount} bệnh nhân mới\n` +
-      `- Gán ${existingPatientsCount} nhóm cho bệnh nhân có sẵn\n` +
-      `- Tạo ${parsedData.length} lần khám\n` +
-      `- Upload ${totalImages} ảnh\n` +
-      `- Với ${annotationPreview?.totalAnnotations || 0} annotations\n\n` +
-      `Xác nhận?`
-    )
+    // Store validation summary and show modal
+    setValidationSummary({
+      totalImages,
+      newPatientsCount,
+      existingPatientsCount,
+      visitsCount: parsedData.length,
+      annotationsCount: annotationPreview?.totalAnnotations || 0,
+      missingReport
+    })
+    setShowValidationModal(true)
+  }
 
-    if (!confirmed) return
+  const handleConfirmUpload = async () => {
+    setShowValidationModal(false)
 
     try {
       setUploading(true)
@@ -396,32 +506,28 @@ function BulkUpload() {
 
       // Add metadata
       formData.append('metadata', JSON.stringify(enrichedMetadata))
-setPatientMappings({})
-    setEditingGroup(null)
-    setSearchQuery('')
-    setSearchResults([])
     
       const response = await bulkUploadImages(formData)
       
       const resultData = response.data.data
       
-      // Build success message with annotation info
-      let successMsg = `✓ Upload thành công!\n\n`
-      successMsg += `📊 Thống kê:\n`
-      successMsg += `- Bệnh nhân mới: ${resultData.patientsCreated}\n`
-      successMsg += `- Lần khám: ${resultData.visitsCreated}\n`
-      successMsg += `- Ảnh: ${resultData.imagesCreated}\n`
-      successMsg += `- Annotations: ${resultData.annotationsCreated || 0}\n`
+      // Show success toast
+      toast.success(
+        `✓ Upload thành công! \n` +
+        `Bệnh nhân: ${resultData.patientsCreated} mới, ` +
+        `Lần khám: ${resultData.visitsCreated}, ` +
+        `Ảnh: ${resultData.imagesCreated}, ` +
+        `Annotations: ${resultData.annotationsCreated || 0}`,
+        { duration: 8000 }
+      )
       
+      // Show warning for images without annotations
       if (resultData.imagesWithoutAnnotations && resultData.imagesWithoutAnnotations.length > 0) {
-        successMsg += `\n⚠️ Cảnh báo: ${resultData.imagesWithoutAnnotations.length} ảnh không có annotation:\n`
-        successMsg += resultData.imagesWithoutAnnotations.slice(0, 3).join('\n')
-        if (resultData.imagesWithoutAnnotations.length > 3) {
-          successMsg += `\n... và ${resultData.imagesWithoutAnnotations.length - 3} ảnh khác`
-        }
+        toast.warning(
+          `⚠️ ${resultData.imagesWithoutAnnotations.length} ảnh không có annotation`,
+          { duration: 5000 }
+        )
       }
-      
-      alert(successMsg)
       
       setUploadResult({
         success: true,
@@ -434,11 +540,17 @@ setPatientMappings({})
       setPatientMappings({})
       setAnnotationFile(null)
       setAnnotationPreview(null)
+      setEditingGroup(null)
+      setSearchQuery('')
+      setSearchResults([])
       
     } catch (error) {
+      const errorMsg = error.response?.data?.error || error.message
+      toast.error(`❌ Upload thất bại: ${errorMsg}`, { duration: 8000 })
+      
       setUploadResult({
         success: false,
-        error: error.response?.data?.error || error.message
+        error: errorMsg
       })
     } finally {
       setUploading(false)
@@ -926,6 +1038,179 @@ setPatientMappings({})
                 }}
               >
                 ❌ Hủy
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Validation Modal */}
+      {showValidationModal && validationSummary && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          zIndex: 1000,
+          padding: '20px'
+        }}>
+          <div style={{
+            background: 'white',
+            borderRadius: '16px',
+            padding: '30px',
+            maxWidth: '600px',
+            width: '100%',
+            maxHeight: '80vh',
+            overflow: 'auto',
+            boxShadow: '0 10px 40px rgba(0,0,0,0.2)'
+          }}>
+            <h2 style={{ 
+              marginBottom: '20px', 
+              color: '#1F2937',
+              fontSize: '22px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px'
+            }}>
+              📊 Xác Nhận Upload
+            </h2>
+
+            {/* Summary Stats */}
+            <div style={{
+              background: '#f8f9fa',
+              borderRadius: '12px',
+              padding: '20px',
+              marginBottom: '20px'
+            }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                <div>
+                  <div style={{ fontSize: '13px', color: '#666', marginBottom: '5px' }}>Bệnh nhân mới</div>
+                  <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#4CAF50' }}>
+                    {validationSummary.newPatientsCount}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '13px', color: '#666', marginBottom: '5px' }}>Bệnh nhân có sẵn</div>
+                  <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#FFA726' }}>
+                    {validationSummary.existingPatientsCount}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '13px', color: '#666', marginBottom: '5px' }}>Lần khám</div>
+                  <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#1E88E5' }}>
+                    {validationSummary.visitsCount}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '13px', color: '#666', marginBottom: '5px' }}>Ảnh</div>
+                  <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#1E88E5' }}>
+                    {validationSummary.totalImages}
+                  </div>
+                </div>
+              </div>
+              <div style={{ marginTop: '15px', paddingTop: '15px', borderTop: '1px solid #ddd' }}>
+                <div style={{ fontSize: '13px', color: '#666', marginBottom: '5px' }}>Annotations</div>
+                <div style={{ fontSize: '20px', fontWeight: 'bold', color: '#9C27B0' }}>
+                  {validationSummary.annotationsCount}
+                </div>
+              </div>
+            </div>
+
+            {/* Missing Images Warning */}
+            {validationSummary.missingReport.length > 0 ? (
+              <div style={{
+                background: '#FFF3E0',
+                border: '2px solid #FFA726',
+                borderRadius: '12px',
+                padding: '20px',
+                marginBottom: '20px'
+              }}>
+                <h3 style={{ 
+                  color: '#E65100', 
+                  fontSize: '16px', 
+                  marginBottom: '15px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px'
+                }}>
+                  <span style={{ fontSize: '22px' }}>⚠️</span>
+                  Cảnh báo: {validationSummary.missingReport.length} bệnh nhân thiếu ảnh
+                </h3>
+                <div style={{ maxHeight: '200px', overflow: 'auto' }}>
+                  {validationSummary.missingReport.map((report, idx) => (
+                    <div key={idx} style={{
+                      background: 'white',
+                      padding: '12px',
+                      borderRadius: '8px',
+                      marginBottom: '10px',
+                      border: '1px solid #FFB74D'
+                    }}>
+                      <div style={{ fontWeight: 'bold', color: '#E65100', marginBottom: '5px' }}>
+                        Bệnh Nhân #{report.patientId}
+                      </div>
+                      <div style={{ fontSize: '13px', color: '#666', marginBottom: '5px' }}>
+                        📅 {new Date(report.visitDate).toLocaleDateString('vi-VN')}
+                      </div>
+                      <div style={{ fontSize: '13px', color: '#666', marginBottom: '5px' }}>
+                        ✅ Có: {report.totalImages}/9 ảnh
+                      </div>
+                      <div style={{ fontSize: '13px', color: '#E65100' }}>
+                        ❌ Thiếu {report.missingCount} ảnh: {report.missingPositions.join(', ')}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div style={{
+                background: '#E8F5E9',
+                border: '2px solid #4CAF50',
+                borderRadius: '12px',
+                padding: '20px',
+                marginBottom: '20px',
+                textAlign: 'center'
+              }}>
+                <div style={{ fontSize: '40px', marginBottom: '10px' }}>✅</div>
+                <div style={{ color: '#2E7D32', fontSize: '16px', fontWeight: '600' }}>
+                  Hoàn hảo! Tất cả bệnh nhân đều có đủ 9 ảnh
+                </div>
+              </div>
+            )}
+
+            {/* Action Buttons */}
+            <div style={{ display: 'flex', gap: '12px', marginTop: '25px' }}>
+              <button
+                className="button"
+                onClick={handleConfirmUpload}
+                disabled={uploading}
+                style={{
+                  flex: 1,
+                  padding: '14px',
+                  fontSize: '15px',
+                  fontWeight: '600',
+                  background: '#4CAF50',
+                  opacity: uploading ? 0.5 : 1,
+                  cursor: uploading ? 'not-allowed' : 'pointer'
+                }}
+              >
+                {uploading ? '⏳ Đang xử lý...' : '✓ Xác Nhận Upload'}
+              </button>
+              <button
+                className="button-secondary button"
+                onClick={() => setShowValidationModal(false)}
+                disabled={uploading}
+                style={{
+                  padding: '14px 24px',
+                  fontSize: '15px',
+                  fontWeight: '600'
+                }}
+              >
+                Hủy
               </button>
             </div>
           </div>
