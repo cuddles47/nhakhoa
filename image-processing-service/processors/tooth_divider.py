@@ -28,7 +28,7 @@ class ToothDivider:
     COLOR_WHITE = (255, 255, 255) # Màu của Răng
     COLOR_YELLOW = (0, 255, 255)  # Màu vàng cho highlight - Yellow/Cyan
     PADDING_PX = 10  # Số pixel mở rộng cho khung răng khi vẽ
-    BBOX_THICKNESS = 5  # Độ dày viền bounding box
+    BBOX_THICKNESS = 10  # Độ dày viền bounding box
     
     def __init__(self, bracket_class=13, padding_px=10):
         """

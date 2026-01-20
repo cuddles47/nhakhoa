@@ -61,7 +61,8 @@ function ImageUpload() {
           path = url.replace(/^\/nhakhoa\//, '');
         }
         
-        const proxyUrl = `${API_URL}/api/images/proxy/${path}`;
+        // Add cache buster timestamp to force reload
+        const proxyUrl = `${API_URL}/api/images/proxy/${path}?t=${Date.now()}`;
         console.log('🔄 URL conversion:', { original: url, proxy: proxyUrl });
         return proxyUrl;
       };
@@ -116,7 +117,8 @@ function ImageUpload() {
           path = url.replace(/^\/nhakhoa\//, '');
         }
         
-        return `${API_URL}/api/images/proxy/${path}`;
+        // Add cache buster timestamp to force reload
+        return `${API_URL}/api/images/proxy/${path}?t=${Date.now()}`;
       };
       
       const allImagesWithProxy = allImages.map(img => ({

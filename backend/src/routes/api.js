@@ -72,6 +72,7 @@ router.get('/api/images', imageController.getAllImages);
 router.get('/api/visits/:visitId/images', imageController.getImagesByVisitId);
 router.get('/api/visits/:visitId/images/:category', imageController.getImagesByCategory);
 router.post('/api/images', upload.single('image'), validate(imageSchemas.create), imageController.createImage);
+router.post('/api/images/:id/rotate', upload.single('image'), imageController.rotateImage);
 router.put('/api/images/:id/validation', validate(imageSchemas.updateValidation), imageController.updateValidationStatus);
 router.delete('/api/images/:id', imageController.deleteImage);
 
