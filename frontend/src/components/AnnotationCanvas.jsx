@@ -198,7 +198,7 @@ const AnnotationCanvas = ({
         }}
       />
       
-      {/* Debug info */}
+      {/* Debug info - stays fixed, doesn't rotate with canvas */}
       <div style={{
         position: 'absolute',
         bottom: '10px',
@@ -209,7 +209,8 @@ const AnnotationCanvas = ({
         borderRadius: '4px',
         fontSize: '11px',
         fontFamily: 'monospace',
-        pointerEvents: 'none'
+        pointerEvents: 'none',
+        zIndex: 1000
       }}>
         Canvas: {canvasRef.current ? `${canvasRef.current.width}x${canvasRef.current.height}` : 'Not mounted'} | 
         Image: {imageRef.current ? `${imageRef.current.width}x${imageRef.current.height}` : 'Not loaded'} | 

@@ -140,7 +140,19 @@ class AnnotationController {
     
     try {
       const { annotationId } = req.params;
-      const { plaque_status, user_id } = req.body;
+      const { plaque_status } = req.body;
+      const user_id = req.user?.id; // Lấy từ authenticated user
+      
+      console.log('Update plaque - req.user:', req.user);
+      console.log('Update plaque - user_id:', user_id);
+      
+      // Kiểm tra user_id
+      if (!user_id) {
+        return res.status(401).json({
+          success: false,
+          error: 'User not authenticated'
+        });
+      }
       
       // Validate plaque_status
       if (plaque_status !== null && plaque_status !== 0 && plaque_status !== 1) {

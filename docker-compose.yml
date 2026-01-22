@@ -2,6 +2,7 @@ services:
   postgres:
     image: postgres:15-alpine
     container_name: nhakhoa-postgres
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${DB_USER:-postgres}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres123}
@@ -12,10 +13,16 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init-db:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   minio:
     image: minio/minio:latest
     container_name: nhakhoa-minio
+    restart: unless-stopped
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
@@ -27,11 +34,17 @@ services:
     volumes:
       - minio_data:/minio/data
     command: server /minio/data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
 
 
   image-processor:
     build: ./image-processing-service
     container_name: nhakhoa-image-processor
+    restart: unless-stopped
     environment:
       HOST: 0.0.0.0
       PORT: 8001
@@ -44,6 +57,67 @@ services:
     volumes:
       - ./image-processing-service:/app
       - processor_temp:/tmp
+    # healthcheck:
+    #   test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+    #   interval: 30s
+    #   timeout: 10s
+    #   retries: 3
+    #   start_period: 40s
+
+  backend:
+    image: nhakhoa-backend:latest
+    container_name: nhakhoa-backend
+    restart: unless-stopped
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres123}
+      DB_NAME: ${DB_NAME:-dental_db}
+      MINIO_HOST: minio
+      MINIO_PORT: 9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+      MINIO_BUCKET: nhakhoa
+      IMAGE_PROCESSING_SERVICE_URL: http://image-processor:8001
+    ports:
+      - "3000:3000"
+    # depends_on:
+    #   postgres:
+    #     condition: service_healthy
+    #   minio:
+    #     condition: service_healthy
+    # healthcheck:
+    #   test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/api/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+    #   interval: 30s
+    #   timeout: 10s
+    #   retries: 3
+    #   start_period: 40s
+
+  frontend:
+    image: nhakhoa-frontend:latest
+    container_name: nhakhoa-frontend
+    restart: unless-stopped
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "4004:4004"
+    environment:
+      VITE_API_URL: http://192.168.88.69:3000
+
+    # depends_on:
+    #   - backend
+    # healthcheck:
+    #   test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:4004"]
+    #   interval: 30s
+    #   timeout: 10s
+    #   retries: 3
 
 
 volumes:

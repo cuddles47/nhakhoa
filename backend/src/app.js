@@ -8,11 +8,31 @@ const app = express();
 
 const cookieParser = require('cookie-parser');
 
-// CORS setup - allow only frontend origin when credentials are required
-const FRONTEND_URL = process.env.FRONTEND_URL;
+// CORS setup - allow multiple frontend origins when credentials are required
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:4004';
+
+// Allow multiple origins (localhost, LAN IP, production)
+const allowedOrigins = [
+  FRONTEND_URL,
+  'http://localhost:4004',
+  'http://localhost:3000',
+  'http://127.0.0.1:4004',
+  'http://192.168.88.69:4004',
+  'http://100.93.48.110:4004'
+];
 
 app.use(cors({
-  origin: FRONTEND_URL,
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps, Postman, curl)
+    if (!origin) return callback(null, true);
+    
+    // Check if origin is in allowed list or matches pattern
+    if (allowedOrigins.includes(origin) || origin.match(/^http:\/\/192\.168\.\d+\.\d+:\d+$/)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true

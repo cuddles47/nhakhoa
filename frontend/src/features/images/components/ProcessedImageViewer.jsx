@@ -24,26 +24,10 @@ const ProcessedImageViewer = ({
   const [annotationStats, setAnnotationStats] = useState(null);
   const [rotation, setRotation] = useState(0); // Current rotation angle (0, 90, 180, 270)
   const [isRotating, setIsRotating] = useState(false); // Saving rotation in progress
+  const [recentlyRotated, setRecentlyRotated] = useState(false); // Flag to suppress warning during rotation
   const { user: currentUser, isAuthenticated } = useAuth();
 
   const hasProcessed = processedImages.some(img => img.url_processed);
-  
-  // Auto-switch to processed view after processing completes
-  useEffect(() => {
-    console.log('ProcessedImageViewer useEffect:', {
-      hasProcessed,
-      processing,
-      viewMode,
-      processedImagesCount: processedImages.length,
-      rawImagesCount: rawImages.length
-    });
-    
-    // Auto-switch to processed view when images are available (no longer managing processing state here)
-    if (hasProcessed && !processing && viewMode === 'raw') {
-      console.log('Auto-switching to processed view');
-      setViewMode('processed');
-    }
-  }, [hasProcessed, processing, viewMode]);
   
   const displayImages = viewMode === 'processed' ? processedImages : rawImages;
 
@@ -104,6 +88,7 @@ const ProcessedImageViewer = ({
     }
 
     setIsRotating(true);
+    setRecentlyRotated(true);
     try {
       // Create canvas to rotate image
       const img = new Image();
@@ -176,15 +161,21 @@ const ProcessedImageViewer = ({
           try {
             await onProcessClick();
             toast.success('Ảnh đã được xử lý lại với góc xoay mới!');
+            setRecentlyRotated(false);
           } catch (err) {
             console.error('Auto-reprocess error:', err);
             toast.error('Không thể tự động xử lý lại. Vui lòng nhấn nút Process.');
+            setRecentlyRotated(false);
           }
-        }, 500);
+        }, 1000);
+      } else {
+        // Fallback: clear flag after 3 seconds if no auto-reprocess
+        setTimeout(() => setRecentlyRotated(false), 3000);
       }
     } catch (err) {
       console.error('Rotation error:', err);
       toast.error('Không thể lưu ảnh xoay: ' + err.message);
+      setRecentlyRotated(false);
     } finally {
       setIsRotating(false);
     }
@@ -1106,7 +1097,7 @@ const ProcessedImageViewer = ({
       )}
 
       {/* Warning when processed images are incomplete */}
-      {hasProcessed && processedImages.filter(img => img.url_processed).length < rawImages.length && !processing && (
+      {hasProcessed && processedImages.filter(img => img.url_processed).length < rawImages.length && !processing && !recentlyRotated && (
         <div style={{
           padding: '8px 12px',
           background: '#fff3cd',

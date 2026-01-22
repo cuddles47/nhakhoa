@@ -195,7 +195,7 @@ class ImageProcessingController {
       const processedImages = updatedImages.filter(img => img.url_processed);
 
       // Return proxy URLs instead of presigned URLs (to avoid CORS)
-      const API_BASE_URL = process.env.API_URL || 'http100.93.48.110://:3000';
+      const API_BASE_URL = process.env.API_URL || 'http://localhost:3000';
       const imagesWithUrls = processedImages.map((image) => {
         // Convert MinIO path to proxy URL
         // e.g., /nhakhoa/visits/26/processed/processed_xxx.jpg -> /api/images/proxy/visits/26/processed/processed_xxx.jpg
@@ -369,23 +369,54 @@ class ImageProcessingController {
       const area = subbox.w * subbox.h;
       const plaqueStatus = subbox.classId === 1 ? 1 : 0; // 1 = plaque, 0 = no plaque
       
-      await pool.query(`
-        INSERT INTO image_annotations (image_id, coco_image_id, category_id, category_name, bbox, area, parent_annotation_id, subbox_region, source_type, plaque_status, predicted_plaque)
-        SELECT $1, $2, $3, $4::varchar(50), $5::jsonb, $6, $7, $8::varchar(20), 'python_subbox', 0, $9
-        WHERE NOT EXISTS (
-          SELECT 1 FROM image_annotations WHERE image_id = $1 AND parent_annotation_id = $7 AND subbox_region = $8::varchar(20)
-        )
-      `, [
-        imageId,
-        dbTeeth.find(t => t.id === parentId).coco_image_id,
-        subbox.classId,  // 0 or 1 (plaque label)
-        region,
-        JSON.stringify(bbox),
-        area,
-        parentId,
-        region,
-        /* predicted_plaque */ plaqueStatus
-      ]);
+      // Check if subbox already exists
+      const existingSubbox = await pool.query(`
+        SELECT id FROM image_annotations 
+        WHERE image_id = $1 
+        AND parent_annotation_id = $2 
+        AND subbox_region = $3
+      `, [imageId, parentId, region]);
+      
+      if (existingSubbox.rows.length > 0) {
+        // Update existing subbox
+        await pool.query(`
+          UPDATE image_annotations SET
+            bbox = $1::jsonb,
+            area = $2,
+            category_id = $3,
+            category_name = $4,
+            predicted_plaque = $5,
+            plaque_status = $6
+          WHERE id = $7
+        `, [
+          JSON.stringify(bbox),
+          area,
+          subbox.classId,
+          region,
+          plaqueStatus,
+          0,
+          existingSubbox.rows[0].id
+        ]);
+      } else {
+        // Insert new subbox
+        await pool.query(`
+          INSERT INTO image_annotations (
+            image_id, coco_image_id, category_id, category_name, bbox, area, 
+            parent_annotation_id, subbox_region, source_type, plaque_status, predicted_plaque
+          )
+          VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, 'python_subbox', 0, $9)
+        `, [
+          imageId,
+          dbTeeth.find(t => t.id === parentId).coco_image_id,
+          subbox.classId,
+          region,
+          JSON.stringify(bbox),
+          area,
+          parentId,
+          region,
+          plaqueStatus
+        ]);
+      }
       subboxCount++;
     }
 

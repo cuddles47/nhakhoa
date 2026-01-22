@@ -6,11 +6,11 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     server: {
-      port: 4005,
+      port: 4004,
       host: '0.0.0.0', // Allow external connections
       hmr: {
-        port: 4005,
-        host: '100.93.48.110'  // Use the external IP for HMR WebSocket
+        port: 4004,
+        host: '192.168.88.69'  // Use the external IP for HMR WebSocket
       },
       proxy: {
         '/api': {

@@ -10,6 +10,7 @@ const imageProcessingController = require('../controllers/ImageProcessingControl
 const annotationController = require('../controllers/AnnotationController');
 const indexController = require('../controllers/index');
 const validate = require('../middleware/validate');
+const { authenticate } = require('../middleware/auth');
 const patientSchemas = require('../validators/patientValidator');
 const visitSchemas = require('../validators/visitValidator');
 const imageSchemas = require('../validators/imageValidator');
@@ -19,19 +20,10 @@ const multer = require('multer');
 const upload = multer({ 
     storage: multer.memoryStorage(),
     limits: {
-        fileSize: 50 * 1024 * 1024, // 50MB per file
-        files: 2000 // Max 2000 files
+        fileSize: 10 * 1024 * 1024, // 10MB per file
+        files: 99 // Max 99 files
     }
 });
-
-// Special multer configuration for bulk upload that allows any fields
-const bulkUpload = multer({
-    storage: multer.memoryStorage(),
-    limits: {
-        fileSize: 50 * 1024 * 1024, // 50MB per file
-        files: 2000 // Max 2000 files
-    }
-}).any(); // Accept any file fields
 
 // Root routes
 router.get('/', indexController.getHello);
@@ -72,12 +64,15 @@ router.get('/api/images', imageController.getAllImages);
 router.get('/api/visits/:visitId/images', imageController.getImagesByVisitId);
 router.get('/api/visits/:visitId/images/:category', imageController.getImagesByCategory);
 router.post('/api/images', upload.single('image'), validate(imageSchemas.create), imageController.createImage);
-router.post('/api/images/:id/rotate', upload.single('image'), imageController.rotateImage);
 router.put('/api/images/:id/validation', validate(imageSchemas.updateValidation), imageController.updateValidationStatus);
+router.post('/api/images/:id/rotate', upload.single('image'), imageController.rotateImage);
 router.delete('/api/images/:id', imageController.deleteImage);
 
 // Bulk upload routes
-router.post('/api/bulk-upload', bulkUpload, bulkUploadController.bulkUpload);
+router.post('/api/bulk-upload', upload.fields([
+    { name: 'images', maxCount: 100 },
+    { name: 'annotationFile', maxCount: 1 }
+]), bulkUploadController.bulkUpload);
 router.get('/api/bulk-upload/history', bulkUploadController.getUploadHistory);
 
 // Stained bulk upload routes
@@ -91,7 +86,7 @@ router.get('/api/visits/:visitId/processing-status', imageProcessingController.g
 
 // Annotation routes
 router.get('/api/images/:imageId/annotations', annotationController.getImageAnnotations);
-router.put('/api/annotations/:annotationId/plaque', annotationController.updatePlaqueStatus);
+router.put('/api/annotations/:annotationId/plaque', authenticate, annotationController.updatePlaqueStatus);
 router.post('/api/images/:imageId/annotations/batch', annotationController.batchUpdateAnnotations);
 router.get('/api/visits/:visitId/annotations/stats', annotationController.getVisitStats);
 
@@ -109,6 +104,9 @@ router.get('/api/images/proxy/*', async (req, res) => {
     const contentType = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : 
                        ext === 'png' ? 'image/png' : 'image/jpeg';
     
+    // Set CORS headers explicitly for image proxy
+    res.set('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.set('Access-Control-Allow-Credentials', 'true');
     res.set('Content-Type', contentType);
     res.set('Cache-Control', 'public, max-age=3600');
     res.send(imageBuffer);

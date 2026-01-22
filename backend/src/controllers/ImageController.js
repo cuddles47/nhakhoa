@@ -224,9 +224,11 @@ class ImageController {
             `;
             const clearResult = await db.query(clearProcessedQuery, [id]);
 
-            // Delete all annotations for this image since they're no longer valid
+            // Delete only subboxes (will be regenerated), keep parent tooth annotations
             const deleteAnnotationsQuery = `
-                DELETE FROM annotations WHERE image_id = $1
+                DELETE FROM image_annotations 
+                WHERE image_id = $1 
+                AND parent_annotation_id IS NOT NULL
             `;
             await db.query(deleteAnnotationsQuery, [id]);
 
