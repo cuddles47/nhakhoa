@@ -16,9 +16,14 @@ class AuthController {
                 } catch (err) {
                     return res.status(401).json({ success: false, message: 'Refresh token hết hạn, vui lòng đăng nhập lại' });
                 }
-                // Tạo access token mới
+                // Get user to include role in new token
+                const user = await User.findById(decoded.id);
+                if (!user) {
+                    return res.status(401).json({ success: false, message: 'Người dùng không tồn tại' });
+                }
+                // Tạo access token mới with role
                 const newAccessToken = jwt.sign(
-                    { id: decoded.id },
+                    { id: user.id, username: user.username, role: user.role },
                     process.env.JWT_SECRET || 'your-secret-key',
                     { expiresIn: '20m' }
                 );
@@ -70,7 +75,7 @@ class AuthController {
 
             // Generate refresh token (long-lived)
             const refreshToken = jwt.sign(
-                { id: user.id },
+                { id: user.id, role: user.role },
                 process.env.JWT_REFRESH_SECRET || 'your-refresh-secret-key',
                 { expiresIn: '7d' } // refresh token: 7 ngày
             );

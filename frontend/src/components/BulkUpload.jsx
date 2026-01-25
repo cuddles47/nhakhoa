@@ -1,8 +1,10 @@
 import { useState, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { bulkUploadImages, getPatients, createPatient } from '../api'
 
 function BulkUpload() {
+  const navigate = useNavigate()
   const [files, setFiles] = useState([])
   const [parsedData, setParsedData] = useState([])
   const [isDragging, setIsDragging] = useState(false)
@@ -50,15 +52,8 @@ function BulkUpload() {
     
     const [, patientId, day, month, year, position] = match
     
-    // Normalize position: convert filename format to internal format
-    // Top -> upper, Central -> middle, Bottom -> lower
-    // left -> left, middle -> center, right -> right
-    let normalizedPosition = position.toLowerCase().replace(/-/g, '_')
-    normalizedPosition = normalizedPosition
-      .replace(/^top_/, 'upper_')
-      .replace(/^central_/, 'middle_')
-      .replace(/^bottom_/, 'lower_')
-      .replace(/_middle$/, '_center')
+    // Normalize position using comprehensive mapping
+    const normalizedPosition = normalizePosition(position)
     
     console.log(`📸 Parsed ${filename}: position="${position}" -> normalized="${normalizedPosition}"`)
     
@@ -69,6 +64,36 @@ function BulkUpload() {
       filename,
       ext: 'jpg' // Default to jpg since format is complex
     }
+  }
+
+  // Normalize position name with all variations
+  const normalizePosition = (positionName) => {
+    if (!positionName) return null
+    
+    const normalized = positionName
+      .toLowerCase()
+      .replace(/[-_\s]/g, '')
+    
+    const positionMap = {
+      'upper_right': ['upperright', 'topright', 'trenphai'],
+      'upper_center': ['uppercenter', 'uppermiddle', 'topcenter', 'topmiddle', 'trengiua'],
+      'upper_left': ['upperleft', 'topleft', 'trentrai'],
+      'middle_right': ['middleright', 'centralright', 'centerright', 'giuaphai'],
+      'middle_center': ['middlecenter', 'middlemiddle', 'centralcenter', 'centralmiddle', 'center', 'giua'],
+      'middle_left': ['middleleft', 'centralleft', 'centerleft', 'giuatrai'],
+      'lower_right': ['lowerright', 'bottomright', 'duoiphai'],
+      'lower_center': ['lowercenter', 'lowermiddle', 'bottomcenter', 'bottommiddle', 'duoigiua'],
+      'lower_left': ['lowerleft', 'bottomleft', 'duoitrai']
+    }
+    
+    for (const [standardType, variants] of Object.entries(positionMap)) {
+      if (variants.some(v => normalized === v || normalized.includes(v) || v.includes(normalized))) {
+        return standardType
+      }
+    }
+    
+    console.warn(`⚠️ Unknown position: "${positionName}"`)
+    return null
   }
 
   const processAnnotationFile = async (file, groupedData) => {
@@ -178,21 +203,28 @@ function BulkUpload() {
       // Try to parse as image file
       const info = parseFilename(file.name)
       if (info) {
-        imageFiles.push(file)
-        parsed.push({
-          file,
-          ...info
-        })
+        // Check if position was successfully normalized
+        if (!info.position) {
+          errors.push(`${file.name} (vị trí không hợp lệ)`)
+        } else {
+          imageFiles.push(file)
+          parsed.push({
+            file,
+            ...info
+          })
+        }
       } else {
-        // Might be image but can't parse filename
+        // Might be image but can't parse filename format
         if (file.type.startsWith('image/')) {
-          errors.push(file.name)
+          errors.push(`${file.name} (sai định dạng tên file)`)
         }
       }
     }
 
     if (errors.length > 0) {
-      toast.error(`⚠️ Không thể parse ${errors.length} file:\n${errors.slice(0, 5).join('\n')}${errors.length > 5 ? '\n...' : ''}`);
+      const errorList = errors.slice(0, 5).join('\n')
+      const moreText = errors.length > 5 ? `\n... và ${errors.length - 5} file khác` : ''
+      toast.error(`⚠️ Không thể parse ${errors.length} file:\n${errorList}${moreText}`, { duration: 8000 });
     }
 
     setFiles(imageFiles)
@@ -546,14 +578,14 @@ function BulkUpload() {
         `Lần khám: ${resultData.visitsCreated}, ` +
         `Ảnh: ${resultData.imagesCreated}, ` +
         `Annotations: ${resultData.annotationsCreated || 0}`,
-        { duration: 8000 }
+        { duration: 5000 }
       )
       
       // Show warning for images without annotations
       if (resultData.imagesWithoutAnnotations && resultData.imagesWithoutAnnotations.length > 0) {
         toast.warning(
           `⚠️ ${resultData.imagesWithoutAnnotations.length} ảnh không có annotation`,
-          { duration: 5000 }
+          { duration: 3000 }
         )
       }
       
@@ -568,6 +600,11 @@ function BulkUpload() {
       setPatientMappings({})
       setAnnotationFile(null)
       setAnnotationPreview(null)
+      
+      // Redirect to patients page after short delay
+      setTimeout(() => {
+        navigate('/patients')
+      }, 2000)
       setEditingGroup(null)
       setSearchQuery('')
       setSearchResults([])

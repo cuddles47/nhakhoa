@@ -312,6 +312,89 @@ function validateAnnotationCount(annotationCount) {
   return { valid: true, warning: null, level: 'ok' };
 }
 
+/**
+ * Convert bounding box from pixels to YOLO normalized format
+ * @param {Array} bbox - [x, y, width, height] in pixels
+ * @param {number} imageWidth - Image width in pixels
+ * @param {number} imageHeight - Image height in pixels
+ * @returns {Object} - { x_center, y_center, width, height } normalized [0-1]
+ */
+function convertBboxToYOLOFormat(bbox, imageWidth, imageHeight) {
+  const [x, y, w, h] = bbox;
+  
+  // Convert top-left corner to center
+  const x_center = (x + w / 2) / imageWidth;
+  const y_center = (y + h / 2) / imageHeight;
+  const width = w / imageWidth;
+  const height = h / imageHeight;
+  
+  // Clamp to [0, 1] range
+  return {
+    x_center: Math.max(0, Math.min(1, x_center)),
+    y_center: Math.max(0, Math.min(1, y_center)),
+    width: Math.max(0, Math.min(1, width)),
+    height: Math.max(0, Math.min(1, height))
+  };
+}
+
+/**
+ * Convert subboxes to YOLO format (6-field: class x y w h parent_tooth_class)
+ * @param {Array} subboxes - Array of subbox objects with bbox, plaque_status, parent info
+ * @param {number} imageWidth - Image width in pixels
+ * @param {number} imageHeight - Image height in pixels
+ * @returns {Array} - Array of YOLO annotation objects
+ */
+function convertSubboxesToYOLO(subboxes, imageWidth, imageHeight) {
+  return subboxes.map(subbox => {
+    const yoloCoords = convertBboxToYOLOFormat(subbox.bbox, imageWidth, imageHeight);
+    
+    // Get parent tooth YOLO class
+    const parentToothClass = getCategoryYOLOClass(subbox.parent_category_name);
+    
+    return {
+      class_id: subbox.plaque_status, // 0 = no_plaque, 1 = has_plaque
+      x_center: yoloCoords.x_center,
+      y_center: yoloCoords.y_center,
+      width: yoloCoords.width,
+      height: yoloCoords.height,
+      parent_tooth_class: parentToothClass
+    };
+  });
+}
+
+/**
+ * Format YOLO subbox annotations to text string (6-field format)
+ * @param {Array} yoloSubboxes - Array of { class_id, x_center, y_center, width, height, parent_tooth_class }
+ * @returns {string} - YOLO format text (one annotation per line)
+ */
+function formatYOLOSubboxText(yoloSubboxes) {
+  return yoloSubboxes
+    .map(ann => 
+      `${ann.class_id} ${ann.x_center.toFixed(6)} ${ann.y_center.toFixed(6)} ${ann.width.toFixed(6)} ${ann.height.toFixed(6)} ${ann.parent_tooth_class}`
+    )
+    .join('\n');
+}
+
+/**
+ * Validate YOLO coordinates are within bounds
+ * @param {Object} yoloCoords - { x_center, y_center, width, height }
+ * @returns {boolean} - true if valid, false otherwise
+ */
+function validateYOLOCoordinates(yoloCoords) {
+  const { x_center, y_center, width, height } = yoloCoords;
+  
+  return (
+    x_center >= 0 && x_center <= 1 &&
+    y_center >= 0 && y_center <= 1 &&
+    width >= 0 && width <= 1 &&
+    height >= 0 && height <= 1 &&
+    (x_center - width / 2) >= 0 &&
+    (x_center + width / 2) <= 1 &&
+    (y_center - height / 2) >= 0 &&
+    (y_center + height / 2) <= 1
+  );
+}
+
 module.exports = {
   splitCOCOByPatient,
   parseCOCOFile,
@@ -320,5 +403,9 @@ module.exports = {
   getCategoryYOLOClass,
   storeBatchAnnotations,
   formatYOLOText,
-  validateAnnotationCount
+  validateAnnotationCount,
+  convertBboxToYOLOFormat,
+  convertSubboxesToYOLO,
+  formatYOLOSubboxText,
+  validateYOLOCoordinates
 };

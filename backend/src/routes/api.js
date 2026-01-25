@@ -8,6 +8,7 @@ const imageController = require('../controllers/ImageController');
 const bulkUploadController = require('../controllers/BulkUploadController');
 const imageProcessingController = require('../controllers/ImageProcessingController');
 const annotationController = require('../controllers/AnnotationController');
+const exportController = require('../controllers/ExportController');
 const indexController = require('../controllers/index');
 const validate = require('../middleware/validate');
 const { authenticate } = require('../middleware/auth');
@@ -20,8 +21,9 @@ const multer = require('multer');
 const upload = multer({ 
     storage: multer.memoryStorage(),
     limits: {
-        fileSize: 10 * 1024 * 1024, // 10MB per file
-        files: 99 // Max 99 files
+        fileSize: 100 * 1024 * 1024, // 100MB per file (for high-quality images)
+        files: 5000, // Max 5000 files for large bulk uploads
+        fieldSize: 25 * 1024 * 1024 // 25MB for text fields (e.g., large JSON metadata)
     }
 });
 
@@ -69,10 +71,7 @@ router.post('/api/images/:id/rotate', upload.single('image'), imageController.ro
 router.delete('/api/images/:id', imageController.deleteImage);
 
 // Bulk upload routes
-router.post('/api/bulk-upload', upload.fields([
-    { name: 'images', maxCount: 100 },
-    { name: 'annotationFile', maxCount: 1 }
-]), bulkUploadController.bulkUpload);
+router.post('/api/bulk-upload', upload.any(), bulkUploadController.bulkUpload);
 router.get('/api/bulk-upload/history', bulkUploadController.getUploadHistory);
 
 // Stained bulk upload routes
@@ -89,6 +88,12 @@ router.get('/api/images/:imageId/annotations', annotationController.getImageAnno
 router.put('/api/annotations/:annotationId/plaque', authenticate, annotationController.updatePlaqueStatus);
 router.post('/api/images/:imageId/annotations/batch', annotationController.batchUpdateAnnotations);
 router.get('/api/visits/:visitId/annotations/stats', annotationController.getVisitStats);
+
+// Export routes
+router.post('/api/export/dataset', authenticate, exportController.exportDataset);
+router.get('/api/exports/:exportId', authenticate, exportController.getExportStatus);
+router.get('/api/exports/:exportId/download', authenticate, exportController.downloadExport);
+router.delete('/api/exports/:exportId', authenticate, exportController.deleteExport);
 
 // Proxy route for MinIO images (to avoid CORS issues)
 router.get('/api/images/proxy/*', async (req, res) => {

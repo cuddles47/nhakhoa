@@ -224,6 +224,149 @@ class Annotation {
       byImage: imageResult.rows
     };
   }
+
+  /**
+   * Get fully annotated images for export
+   * An image is fully annotated if all subboxes have plaque_status set
+   * @param {Array} visitIds - Array of visit IDs
+   * @param {Object} filters - { annotationStatus: 'full'|'partial'|'any', plaqueOnly: boolean }
+   * @returns {Array} - Array of image records with annotation stats
+   */
+  static async getFullyAnnotatedImages(visitIds, filters = {}) {
+    const { annotationStatus = 'full', plaqueOnly = false } = filters;
+    
+    let query = `
+      SELECT 
+        i.id,
+        i.visit_id,
+        i.url,
+        i.original_filename,
+        i.image_category,
+        i.image_type,
+        i.width,
+        i.height,
+        i.taken_at,
+        COUNT(DISTINCT parent.id) as tooth_count,
+        COUNT(DISTINCT subbox.id) as subbox_count,
+        COUNT(DISTINCT CASE WHEN subbox.plaque_status IS NOT NULL THEN subbox.id END) as annotated_subbox_count,
+        COUNT(DISTINCT CASE WHEN subbox.plaque_status = 1 THEN subbox.id END) as plaque_positive_count
+      FROM images i
+      LEFT JOIN image_annotations parent ON i.id = parent.image_id AND parent.parent_annotation_id IS NULL
+      LEFT JOIN image_annotations subbox ON parent.id = subbox.parent_annotation_id
+      WHERE i.visit_id = ANY($1)
+        AND i.deleted_at IS NULL
+        AND i.image_category = 'raw'
+        AND i.has_annotations = true
+      GROUP BY i.id
+    `;
+    
+    // Add filters based on annotation status
+    if (annotationStatus === 'full') {
+      query += `
+        HAVING COUNT(DISTINCT subbox.id) > 0 
+        AND COUNT(DISTINCT CASE WHEN subbox.plaque_status IS NOT NULL THEN subbox.id END) = COUNT(DISTINCT subbox.id)
+      `;
+    } else if (annotationStatus === 'partial') {
+      query += `
+        HAVING COUNT(DISTINCT CASE WHEN subbox.plaque_status IS NOT NULL THEN subbox.id END) > 0
+      `;
+    }
+    
+    if (plaqueOnly) {
+      query += `
+        ${annotationStatus === 'any' ? 'HAVING' : 'AND'} COUNT(DISTINCT CASE WHEN subbox.plaque_status = 1 THEN subbox.id END) > 0
+      `;
+    }
+    
+    query += ' ORDER BY i.id';
+    
+    const result = await db.query(query, [visitIds]);
+    return result.rows;
+  }
+
+  /**
+   * Get subboxes for export with parent tooth information
+   * @param {Array} imageIds - Array of image IDs
+   * @returns {Array} - Array of subbox records with parent tooth info
+   */
+  static async getSubboxesForExport(imageIds) {
+    const query = `
+      SELECT 
+        subbox.id as subbox_id,
+        subbox.image_id,
+        subbox.bbox,
+        subbox.plaque_status,
+        subbox.subbox_region,
+        subbox.parent_annotation_id,
+        parent.category_name as parent_category_name,
+        parent.category_id as parent_category_id,
+        parent.bbox as parent_bbox,
+        i.width as image_width,
+        i.height as image_height,
+        i.original_filename,
+        i.visit_id,
+        v.patient_id
+      FROM image_annotations subbox
+      JOIN image_annotations parent ON subbox.parent_annotation_id = parent.id
+      JOIN images i ON subbox.image_id = i.id
+      JOIN visits v ON i.visit_id = v.id
+      WHERE subbox.image_id = ANY($1)
+        AND subbox.parent_annotation_id IS NOT NULL
+        AND subbox.plaque_status IS NOT NULL
+      ORDER BY subbox.image_id, parent.id, subbox.subbox_region
+    `;
+    
+    const result = await db.query(query, [imageIds]);
+    return result.rows.map(row => ({
+      ...row,
+      bbox: typeof row.bbox === 'string' ? JSON.parse(row.bbox) : row.bbox,
+      parent_bbox: typeof row.parent_bbox === 'string' ? JSON.parse(row.parent_bbox) : row.parent_bbox
+    }));
+  }
+
+  /**
+   * Get images by patient IDs for dataset splitting
+   * @param {Array} patientIds - Array of patient IDs
+   * @returns {Object} - Map of patient_id → array of image IDs
+   */
+  static async getImagesByPatients(patientIds) {
+    const query = `
+      SELECT 
+        v.patient_id,
+        array_agg(i.id ORDER BY i.id) as image_ids
+      FROM images i
+      JOIN visits v ON i.visit_id = v.id
+      WHERE v.patient_id = ANY($1)
+        AND i.deleted_at IS NULL
+        AND i.image_category = 'raw'
+        AND i.has_annotations = true
+      GROUP BY v.patient_id
+    `;
+    
+    const result = await db.query(query, [patientIds]);
+    const patientImageMap = {};
+    result.rows.forEach(row => {
+      patientImageMap[row.patient_id] = row.image_ids;
+    });
+    return patientImageMap;
+  }
+
+  /**
+   * Get all unique patient IDs from visit IDs
+   * @param {Array} visitIds - Array of visit IDs
+   * @returns {Array} - Array of unique patient IDs
+   */
+  static async getPatientIdsByVisits(visitIds) {
+    const query = `
+      SELECT DISTINCT patient_id
+      FROM visits
+      WHERE id = ANY($1)
+      ORDER BY patient_id
+    `;
+    
+    const result = await db.query(query, [visitIds]);
+    return result.rows.map(row => row.patient_id);
+  }
 }
 
 module.exports = Annotation;
