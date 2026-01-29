@@ -2,7 +2,7 @@ const db = require('../config/database');
 
 class Patient {
     static async findAll(options = {}) {
-        const { page = 1, limit = 10, search, status, sortBy = 'created_at', sortOrder = 'DESC' } = options;
+        const { page = 1, limit = 10, search, status, sortBy = 'name_id', sortOrder = 'DESC' } = options;
         const offset = (page - 1) * limit;
         
         let whereConditions = [];
@@ -30,7 +30,23 @@ class Patient {
         whereConditions.push('deleted_at IS NULL');
         
         const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
-        const orderByClause = `ORDER BY ${sortBy} ${sortOrder}`;
+        
+        // Extract number from name pattern "Bệnh Nhân #XXXX" for sorting
+        // Use NULLIF to handle cases where extraction fails, fallback to id
+        let orderByClause;
+        const allowedSortFields = ['id', 'name', 'name_id', 'phone', 'gender', 'dob', 'created_at'];
+        const validSortBy = allowedSortFields.includes(sortBy) ? sortBy : 'name_id';
+        const validSortOrder = ['ASC', 'DESC'].includes(sortOrder.toUpperCase()) ? sortOrder.toUpperCase() : 'DESC';
+        
+        if (validSortBy === 'name_id') {
+            orderByClause = `ORDER BY 
+                COALESCE(
+                    NULLIF(regexp_replace(name, '[^0-9]', '', 'g'), '')::integer,
+                    id
+                ) ${validSortOrder}`;
+        } else {
+            orderByClause = `ORDER BY ${validSortBy} ${validSortOrder}`;
+        }
         
         // Get total count
         const countQuery = `SELECT COUNT(*) FROM patients ${whereClause}`;

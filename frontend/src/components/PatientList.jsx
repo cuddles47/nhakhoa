@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { getPatients, searchPatients, deletePatient } from '../api'
 import PatientForm from './PatientForm'
 import toast from 'react-hot-toast';
-import { FiPlus, FiSearch, FiEye, FiTrash2, FiChevronLeft, FiChevronRight, FiChevronsLeft, FiChevronsRight, FiX } from 'react-icons/fi'
+import { FiPlus, FiSearch, FiEye, FiTrash2, FiChevronLeft, FiChevronRight, FiChevronsLeft, FiChevronsRight, FiX, FiArrowUp, FiArrowDown } from 'react-icons/fi'
 
 function PatientList() {
   const navigate = useNavigate()
@@ -17,6 +17,8 @@ function PatientList() {
   const page = parseInt(searchParams.get('page')) || 1
   const limit = parseInt(searchParams.get('limit')) || 10
   const searchQuery = searchParams.get('search') || ''
+  const sortBy = searchParams.get('sortBy') || 'name_id'
+  const sortOrder = searchParams.get('sortOrder') || 'DESC'
   
   const [totalPages, setTotalPages] = useState(0)
   const [total, setTotal] = useState(0)
@@ -30,7 +32,9 @@ function PatientList() {
       setLoading(true)
       const params = new URLSearchParams({
         page: page,
-        limit: limit
+        limit: limit,
+        sortBy: sortBy,
+        sortOrder: sortOrder
       })
       if (searchQuery) {
         params.append('search', searchQuery)
@@ -84,6 +88,26 @@ function PatientList() {
     newParams.set('limit', e.target.value)
     newParams.set('page', '1') // Reset to page 1
     setSearchParams(newParams)
+  }
+
+  const handleSort = (field) => {
+    const newParams = new URLSearchParams(searchParams)
+    
+    // Toggle sort order if clicking same field, otherwise default to DESC
+    if (sortBy === field) {
+      newParams.set('sortOrder', sortOrder === 'ASC' ? 'DESC' : 'ASC')
+    } else {
+      newParams.set('sortBy', field)
+      newParams.set('sortOrder', 'DESC')
+    }
+    newParams.set('page', '1') // Reset to page 1
+    
+    setSearchParams(newParams)
+  }
+
+  const getSortIcon = (field) => {
+    if (sortBy !== field) return null
+    return sortOrder === 'ASC' ? <FiArrowUp size={14} /> : <FiArrowDown size={14} />
   }
 
 
@@ -140,11 +164,46 @@ function PatientList() {
       <table className="table">
         <thead>
           <tr>
-            <th>ID</th>
-            <th>Họ Tên</th>
-            <th>SĐT</th>
-            <th>Giới Tính</th>
-            <th>Ngày Sinh</th>
+            <th 
+              onClick={() => handleSort('id')} 
+              style={{ cursor: 'pointer', userSelect: 'none' }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                ID {getSortIcon('id')}
+              </div>
+            </th>
+            <th 
+              onClick={() => handleSort('name_id')} 
+              style={{ cursor: 'pointer', userSelect: 'none' }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                Họ Tên {getSortIcon('name_id')}
+              </div>
+            </th>
+            <th 
+              onClick={() => handleSort('phone')} 
+              style={{ cursor: 'pointer', userSelect: 'none' }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                SĐT {getSortIcon('phone')}
+              </div>
+            </th>
+            <th 
+              onClick={() => handleSort('gender')} 
+              style={{ cursor: 'pointer', userSelect: 'none' }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                Giới Tính {getSortIcon('gender')}
+              </div>
+            </th>
+            <th 
+              onClick={() => handleSort('dob')} 
+              style={{ cursor: 'pointer', userSelect: 'none' }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                Ngày Sinh {getSortIcon('dob')}
+              </div>
+            </th>
             <th>Hành Động</th>
           </tr>
         </thead>
