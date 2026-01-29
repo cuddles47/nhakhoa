@@ -245,6 +245,17 @@ function ImageUpload() {
             const imgType = img.image_type?.toLowerCase() || ''
             const posType = pos.type.toLowerCase()
             
+            // Debug log for middle_center
+            if (pos.index === 5) {
+              console.log(`🔍 Matching pos 5 (${pos.type}):`, {
+                imgType,
+                posType,
+                image: img,
+                startsWithMatch: imgType.startsWith(posType),
+                exactMatch: imgType === posType
+              })
+            }
+            
             // Check if image_type starts with or contains the position
             // Handle formats like: "lower_left_jpg.rf.hash" or "lower_left"
             if (imgType.startsWith(posType)) return true

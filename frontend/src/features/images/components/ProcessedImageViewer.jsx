@@ -251,7 +251,7 @@ const ProcessedImageViewer = ({
         currentUser.id
       );
 
-      toast.success(newStatus === 1 ? 'Đánh dấu có mảng bám' : 'Đánh dấu không có mảng bám');
+      toast.success(newStatus === 1 ? '🔴 Có mảng bám' : '🟢 Không có mảng bám');
       
       // Reload annotations to reflect change
       if (lightboxImage?.imageId) {
@@ -1040,7 +1040,7 @@ const ProcessedImageViewer = ({
         </div>
         
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          {rawImages.length >= 9 && !hasProcessed && (
+          {rawImages.length > 0 && !hasProcessed && (
             <Button
               onClick={handleProcessClick}
               disabled={processing}
@@ -1169,20 +1169,7 @@ const ProcessedImageViewer = ({
         {renderGrid()}
       </div>
 
-      {!hasProcessed && rawImages.length > 0 && rawImages.length < 9 && (
-        <div style={{
-          textAlign: 'center',
-          padding: '12px',
-          background: '#fef3c7',
-          borderRadius: '4px',
-          margin: '8px',
-          border: '1px solid #fde68a'
-        }}>
-          <p style={{ margin: 0, color: '#92400e', fontSize: '11px', fontWeight: '500' }}>
-            💡 Upload đủ 9 ảnh RAW để bật chức năng xử lý ảnh
-          </p>
-        </div>
-      )}
+
     </div>
   );
 };

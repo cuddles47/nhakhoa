@@ -75,17 +75,14 @@ const AnnotationCanvas = ({
           const box = subbox.bbox;
           if (!Array.isArray(box) || box.length !== 4) return;
           const isHovered = hoveredSubbox?.subbox_id === subbox.subbox_id;
-          // Determine color based on plaque status
+          // Determine color based on plaque status (always 0 or 1 after processing)
           let fillColor, strokeColor;
-          if (subbox.plaque_status === null) {
-            fillColor = 'rgba(148, 163, 184, 0.3)'; // Gray - not annotated
-            strokeColor = '#94a3b8';
-          } else if (subbox.plaque_status === 0) {
-            fillColor = 'rgba(16, 185, 129, 0.4)'; // Green - no plaque
-            strokeColor = '#10b981';
-          } else {
+          if (subbox.plaque_status === 1) {
             fillColor = 'rgba(239, 68, 68, 0.4)'; // Red - has plaque
             strokeColor = '#ef4444';
+          } else {
+            fillColor = 'rgba(16, 185, 129, 0.4)'; // Green - no plaque (default 0)
+            strokeColor = '#10b981';
           }
           // Fill subbox
           ctx.fillStyle = fillColor;
@@ -237,11 +234,7 @@ const AnnotationCanvas = ({
             Region: {hoveredSubbox.region}
           </div>
           <div style={{ fontSize: '12px', color: '#cbd5e1' }}>
-            Status: {
-              hoveredSubbox.plaque_status === 1 ? '🟢 No plaque' :
-              hoveredSubbox.plaque_status === 0 ? '🔴 Has plaque' :
-              '🔴 Has plaque'
-            }
+            Status: {hoveredSubbox.plaque_status === 1 ? '🔴 Has plaque' : '🟢 No plaque'}
           </div>
           {hoveredSubbox.annotated_by && (
             <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px' }}>

@@ -178,7 +178,15 @@ function BulkUpload() {
         message += `  - Thiếu ${report.missingCount}: ${report.missingPositions.join(', ')}\n\n`
       })
       
-      toast.warning(message, { duration: 10000 })
+      toast(message, { 
+        duration: 10000,
+        icon: '⚠️',
+        style: {
+          background: '#fff3cd',
+          color: '#856404',
+          border: '1px solid #ffc107'
+        }
+      })
     } else {
       toast.success('✓ Tất cả bệnh nhân đều có đủ 9 ảnh!');
     }
@@ -251,7 +259,14 @@ function BulkUpload() {
       toast.success(`✓ Tìm thấy file annotation: ${foundAnnotationFile.name}`);
       await processAnnotationFile(foundAnnotationFile, groupedArray)
     } else if (imageFiles.length > 0) {
-      toast.warning('⚠️ Không tìm thấy file annotation (.json) trong folder');
+      toast('⚠️ Không tìm thấy file annotation (.json) trong folder', {
+        icon: '⚠️',
+        style: {
+          background: '#fff3cd',
+          color: '#856404',
+          border: '1px solid #ffc107'
+        }
+      });
     }
     
     // Reset patient mappings when new files are loaded
@@ -583,10 +598,15 @@ function BulkUpload() {
       
       // Show warning for images without annotations
       if (resultData.imagesWithoutAnnotations && resultData.imagesWithoutAnnotations.length > 0) {
-        toast.warning(
-          `⚠️ ${resultData.imagesWithoutAnnotations.length} ảnh không có annotation`,
-          { duration: 3000 }
-        )
+        toast(`⚠️ ${resultData.imagesWithoutAnnotations.length} ảnh không có annotation`, {
+          duration: 3000,
+          icon: '⚠️',
+          style: {
+            background: '#fff3cd',
+            color: '#856404',
+            border: '1px solid #ffc107'
+          }
+        })
       }
       
       setUploadResult({

@@ -394,7 +394,7 @@ class ImageProcessingController {
           subbox.classId,
           region,
           plaqueStatus,
-          0,
+          1,
           existingSubbox.rows[0].id
         ]);
       } else {
@@ -404,7 +404,7 @@ class ImageProcessingController {
             image_id, coco_image_id, category_id, category_name, bbox, area, 
             parent_annotation_id, subbox_region, source_type, plaque_status, predicted_plaque
           )
-          VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, 'python_subbox', 0, $9)
+          VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, 'python_subbox', 1, $9)
         `, [
           imageId,
           dbTeeth.find(t => t.id === parentId).coco_image_id,

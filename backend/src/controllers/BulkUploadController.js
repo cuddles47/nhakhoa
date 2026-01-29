@@ -291,13 +291,21 @@ class BulkUploadController {
                     console.log(`[${visit.id}] Matching ${uploadResult.originalName}: ${matchedImage ? 'FOUND (coco_id=' + matchedImage.coco_id + ')' : 'NOT FOUND'}`);
 
                     // Truncate long values to fit VARCHAR constraints
+                    // Map position to index (1-9)
+                    const positionIndexMap = {
+                        'upper_right': 1, 'upper_center': 2, 'upper_left': 3,
+                        'middle_right': 4, 'middle_center': 5, 'middle_left': 6,
+                        'lower_right': 7, 'lower_center': 8, 'lower_left': 9
+                    };
+                    const imageIndex = positionIndexMap[fileInfo.imageInfo.position] || null;
+                    
                     const imageData = {
                         visit_id: visit.id,
                         url: uploadResult.url, // VARCHAR(255) - Changed from url_minio to url
                         original_filename: uploadResult.originalName, // NEW: Store original filename
                         image_category: fileInfo.imageCategory, // VARCHAR(20)
                         image_type: fileInfo.imageInfo.position.substring(0, 50), // VARCHAR(50) - truncate
-                        image_index: null, // Could parse from position if needed
+                        image_index: imageIndex, // Set proper index based on position
                         validation_status: 'pending', // VARCHAR(20)
                         notes: `Bulk upload: ${uploadResult.originalName}`, // TEXT - no limit
                         width: matchedImage ? matchedImage.width : null, // NEW: Store image dimensions

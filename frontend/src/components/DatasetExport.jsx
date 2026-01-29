@@ -45,7 +45,7 @@ function DatasetExport() {
   const loadPatients = async () => {
     try {
       setLoading(true);
-      const response = await getAllPatients();
+      const response = await api.get('/patients?limit=10000');
       setPatients(response.data.data || []);
     } catch (error) {
       console.error('Failed to load patients:', error);
@@ -61,7 +61,7 @@ function DatasetExport() {
       const allVisits = [];
       
       for (const patientId of selectedPatients) {
-        const response = await getVisitsByPatient(patientId);
+        const response = await api.get(`/patients/${patientId}/visits`);
         // Handle different response structures
         const patientVisits = Array.isArray(response.data) ? response.data : (response.data?.data || []);
         if (Array.isArray(patientVisits)) {
