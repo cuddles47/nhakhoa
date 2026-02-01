@@ -65,12 +65,18 @@ async function checkDiskSpace() {
 async function splitDatasetByPatient(images, splitRatio = DEFAULT_SPLIT_RATIO) {
   // Validate split ratios
   const sum = splitRatio.train + splitRatio.val + splitRatio.test;
-  if (Math.abs(sum - 1.0) > 0.001) {
+  // Allow sum = 0 (no split) or sum = 1.0 (valid split)
+  if (sum > 0 && Math.abs(sum - 1.0) > 0.001) {
     throw new Error(`${ERROR_CODES.INVALID_SPLIT_RATIO}: Ratios must sum to 1.0, got ${sum}`);
   }
   
-  if (splitRatio.train < 0.05 || splitRatio.val < 0.05 || splitRatio.test < 0.05) {
-    throw new Error(`${ERROR_CODES.INVALID_SPLIT_RATIO}: Each split must be at least 5%`);
+  // Only check minimum if splits are being used
+  if (sum > 0) {
+    if ((splitRatio.train > 0 && splitRatio.train < 0.05) || 
+        (splitRatio.val > 0 && splitRatio.val < 0.05) || 
+        (splitRatio.test > 0 && splitRatio.test < 0.05)) {
+      throw new Error(`${ERROR_CODES.INVALID_SPLIT_RATIO}: Each non-zero split must be at least 5%`);
+    }
   }
   
   // Group images by patient
@@ -480,8 +486,307 @@ async function cleanupExpiredExports(maxAgeSeconds = 3600) {
   }
 }
 
+/**
+ * Generate COCO format dataset
+ * @param {Object} params - Export parameters
+ * @returns {Promise<Object>} - { exportId, zipPath, stats }
+ */
+async function generateCOCODataset(params) {
+  const {
+    visitIds,
+    patientIds = null,
+    splitRatio = DEFAULT_SPLIT_RATIO,
+    filters = {},
+    format = EXPORT_FORMATS.COCO
+  } = params;
+  
+  // Check disk space
+  const availableSpace = await checkDiskSpace();
+  if (availableSpace < MIN_FREE_DISK_SPACE) {
+    throw new Error(`${ERROR_CODES.INSUFFICIENT_SPACE}: Only ${(availableSpace / 1024 / 1024 / 1024).toFixed(2)}GB available`);
+  }
+  
+  // Create export directory
+  await ensureTempDir();
+  const exportId = `exp_${crypto.randomUUID()}`;
+  const exportDir = path.join(TEMP_DIR_PATH, exportId);
+  await fs.mkdir(exportDir, { recursive: true });
+  
+  try {
+    // 1. Fetch exportable images
+    console.log(`Fetching annotated images for visits: ${visitIds.join(', ')}`);
+    const images = await Annotation.getFullyAnnotatedImages(visitIds, filters);
+    
+    if (images.length === 0) {
+      throw new Error(`${ERROR_CODES.NO_ANNOTATED_IMAGES}: No fully annotated images found`);
+    }
+    
+    console.log(`Found ${images.length} exportable images`);
+    
+    // 2. Split dataset by patient
+    console.log('Splitting dataset by patient...');
+    const splits = await splitDatasetByPatient(images, splitRatio);
+    
+    // 3. Fetch all subboxes for export
+    const imageIds = images.map(img => img.id);
+    console.log(`Fetching subboxes for ${imageIds.length} images...`);
+    const allSubboxes = await Annotation.getSubboxesForExport(imageIds);
+    
+    // Group subboxes by image_id
+    const subboxesByImage = {};
+    allSubboxes.forEach(subbox => {
+      if (!subboxesByImage[subbox.image_id]) {
+        subboxesByImage[subbox.image_id] = [];
+      }
+      subboxesByImage[subbox.image_id].push(subbox);
+    });
+    
+    // 4. Create directory structure for COCO
+    const splitNames = ['train', 'val', 'test'];
+    for (const split of splitNames) {
+      await fs.mkdir(path.join(exportDir, split), { recursive: true });
+    }
+    
+    // 5. Process each split and generate COCO JSON
+    let processedCount = 0;
+    let skippedCount = 0;
+    const stats = {
+      totalImages: 0,
+      totalSubboxes: 0,
+      plaquePositive: 0,
+      plaqueNegative: 0,
+      splits: { train: 0, val: 0, test: 0 }
+    };
+    
+    for (const [splitName, imageIdsInSplit] of Object.entries(splits)) {
+      console.log(`Processing ${splitName} split: ${imageIdsInSplit.length} images`);
+      
+      // Initialize COCO structure
+      const cocoData = {
+        info: {
+          description: 'NhaKhoa Plaque Detection Dataset',
+          version: '1.0',
+          year: new Date().getFullYear(),
+          contributor: 'NhaKhoa Team',
+          date_created: new Date().toISOString().split('T')[0]
+        },
+        licenses: [{
+          id: 1,
+          name: 'Proprietary',
+          url: ''
+        }],
+        categories: [
+          { id: 0, name: 'no_plaque', supercategory: 'dental' },
+          { id: 1, name: 'has_plaque', supercategory: 'dental' }
+        ],
+        images: [],
+        annotations: []
+      };
+      
+      let annotationId = 1;
+      let imageIdCounter = 1;
+      
+      for (const imageId of imageIdsInSplit) {
+        try {
+          const image = images.find(img => img.id === imageId);
+          if (!image) {
+            console.warn(`Image ${imageId} not found in images array`);
+            continue;
+          }
+          
+          const subboxes = subboxesByImage[imageId] || [];
+          if (subboxes.length === 0) {
+            console.warn(`Image ${imageId} has no subboxes, skipping`);
+            skippedCount++;
+            continue;
+          }
+          
+          console.log(`Processing image ${imageId}: ${image.original_filename}, subboxes: ${subboxes.length}`);
+          
+          // Sanitize filename
+          const sanitizedName = sanitizeFilename(image.original_filename);
+          const baseName = path.parse(sanitizedName).name;
+          const imageExt = path.parse(image.original_filename).ext || '.jpg';
+          const imageName = `${baseName}${imageExt}`;
+          
+          // Download image
+          const imageDest = path.join(exportDir, splitName, imageName);
+          console.log(`Downloading from ${image.url} to ${imageDest}`);
+          await downloadImage(image.url, imageDest);
+          
+          // Add image to COCO
+          cocoData.images.push({
+            id: imageIdCounter,
+            file_name: imageName,
+            width: image.width,
+            height: image.height,
+            license: 1,
+            date_captured: image.created_at || new Date().toISOString()
+          });
+          
+          // Convert subboxes to COCO annotations
+          for (const subbox of subboxes) {
+            // Parse bbox từ database - format là [x, y, w, h] in pixels
+            const bbox = subbox.bbox; // Already parsed in getSubboxesForExport
+            if (!Array.isArray(bbox) || bbox.length < 4) {
+              console.warn(`Invalid bbox format for subbox ${subbox.subbox_id}, skipping`);
+              continue;
+            }
+            
+            const [x, y, w, h] = bbox;
+            
+            // Validate and clamp bbox
+            const x_min = Math.max(0, x);
+            const y_min = Math.max(0, y);
+            const x_max = Math.min(image.width, x + w);
+            const y_max = Math.min(image.height, y + h);
+            const width = x_max - x_min;
+            const height = y_max - y_min;
+            
+            if (width <= 0 || height <= 0) {
+              console.warn(`Invalid bbox dimensions for subbox ${subbox.subbox_id}: [${x}, ${y}, ${w}, ${h}], skipping`);
+              continue;
+            }
+            
+            // Determine class based on plaque_status
+            // plaque_status: 'plaque' | 'no_plaque' | null
+            const categoryId = (subbox.plaque_status === 'plaque') ? 1 : 0;
+            
+            cocoData.annotations.push({
+              id: annotationId++,
+              image_id: imageIdCounter,
+              category_id: categoryId,
+              bbox: [x_min, y_min, width, height],
+              area: width * height,
+              iscrowd: 0,
+              segmentation: [] // Can be extended with polygon segmentation if needed
+            });
+            
+            // Update stats
+            stats.totalSubboxes++;
+            if (categoryId === 1) {
+              stats.plaquePositive++;
+            } else {
+              stats.plaqueNegative++;
+            }
+          }
+          
+          processedCount++;
+          stats.totalImages++;
+          stats.splits[splitName]++;
+          imageIdCounter++;
+          
+        } catch (error) {
+          console.error(`Failed to process image ${imageId}:`, error.message);
+          skippedCount++;
+        }
+      }
+      
+      // Write COCO JSON file for this split
+      const cocoJsonPath = path.join(exportDir, splitName, `annotations.json`);
+      await fs.writeFile(cocoJsonPath, JSON.stringify(cocoData, null, 2));
+      console.log(`COCO JSON written: ${cocoJsonPath}`);
+    }
+    
+    console.log(`Processed: ${processedCount}, Skipped: ${skippedCount}`);
+    
+    if (processedCount === 0) {
+      throw new Error(`${ERROR_CODES.NO_ANNOTATED_IMAGES}: No valid images could be processed`);
+    }
+    
+    // 6. Generate README
+    const readme = `# NhaKhoa Plaque Detection Dataset - COCO Format
+
+## Dataset Information
+- **Export ID**: ${exportId}
+- **Generated**: ${new Date().toISOString()}
+- **Format**: COCO (Common Objects in Context)
+- **Classes**: 2 (no_plaque, has_plaque)
+
+## Statistics
+- **Total Images**: ${stats.totalImages}
+- **Total Subboxes**: ${stats.totalSubboxes}
+- **Plaque Positive**: ${stats.plaquePositive}
+- **Plaque Negative**: ${stats.plaqueNegative}
+
+## Split Distribution
+- **Train**: ${stats.splits.train} images
+- **Val**: ${stats.splits.val} images
+- **Test**: ${stats.splits.test} images
+
+## Directory Structure
+\`\`\`
+dataset/
+├── train/
+│   ├── annotations.json
+│   └── <images>
+├── val/
+│   ├── annotations.json
+│   └── <images>
+└── test/
+    ├── annotations.json
+    └── <images>
+\`\`\`
+
+## COCO JSON Format
+Each annotations.json contains:
+- \`info\`: Dataset metadata
+- \`licenses\`: License information
+- \`categories\`: Class definitions (id: 0=no_plaque, 1=has_plaque)
+- \`images\`: List of images with id, file_name, width, height
+- \`annotations\`: Bounding boxes with id, image_id, category_id, bbox [x, y, width, height]
+
+## Usage Example (PyTorch)
+\`\`\`python
+from pycocotools.coco import COCO
+
+# Load annotations
+coco_train = COCO('train/annotations.json')
+
+# Get all image IDs
+img_ids = coco_train.getImgIds()
+
+# Load an image and its annotations
+img_info = coco_train.loadImgs(img_ids[0])[0]
+ann_ids = coco_train.getAnnIds(imgIds=img_info['id'])
+anns = coco_train.loadAnns(ann_ids)
+\`\`\`
+
+## Notes
+- Dataset split by patient to prevent data leakage
+- All bounding boxes validated and clamped to image dimensions
+- Only fully annotated images included
+`;
+    await fs.writeFile(path.join(exportDir, 'README.md'), readme);
+    
+    // 7. Create ZIP archive
+    console.log('Creating ZIP archive...');
+    const zipPath = path.join(TEMP_DIR_PATH, `${exportId}.zip`);
+    await createZipArchive(exportDir, zipPath);
+    
+    // 8. Cleanup export directory
+    await fs.rm(exportDir, { recursive: true, force: true });
+    
+    return {
+      exportId,
+      zipPath,
+      stats
+    };
+    
+  } catch (error) {
+    // Cleanup on error
+    try {
+      await fs.rm(exportDir, { recursive: true, force: true });
+    } catch (cleanupError) {
+      console.error('Failed to cleanup after error:', cleanupError.message);
+    }
+    throw error;
+  }
+}
+
 module.exports = {
   generateYOLODataset,
+  generateCOCODataset,
   splitDatasetByPatient,
   cleanupExpiredExports,
   ensureTempDir,

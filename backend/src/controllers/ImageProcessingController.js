@@ -276,6 +276,13 @@ class ImageProcessingController {
     const pool = require('../config/database');
     const lines = annotationContent.trim().split('\n').filter(line => line.trim());
     
+    // Delete all existing subboxes for this image before creating new ones
+    await pool.query(`
+      DELETE FROM image_annotations 
+      WHERE image_id = $1 
+        AND parent_annotation_id IS NOT NULL
+    `, [imageId]);
+    
     if (!processedWidth || !processedHeight || processedWidth === 0 || processedHeight === 0) {
       return;
     }
@@ -289,10 +296,13 @@ class ImageProcessingController {
     const scaleY = originalHeight / processedHeight;
     
     // Get all parent teeth from database (sorted by id for consistent ordering)
+    // IMPORTANT: Exclude Brace/bracket annotations - Python service only processes teeth
     const teethResult = await pool.query(`
-      SELECT id, category_id, bbox, coco_image_id 
+      SELECT id, category_id, category_name, bbox, coco_image_id 
       FROM image_annotations 
-      WHERE image_id = $1 AND parent_annotation_id IS NULL
+      WHERE image_id = $1 
+        AND parent_annotation_id IS NULL
+        AND LOWER(category_name) NOT IN ('brace', 'bracket')
       ORDER BY id
     `, [imageId]);
     

@@ -5,7 +5,7 @@
 
 const path = require('path');
 const fs = require('fs').promises;
-const { generateYOLODataset, cleanupExpiredExports } = require('../services/datasetExportService');
+const { generateYOLODataset, generateCOCODataset, cleanupExpiredExports } = require('../services/datasetExportService');
 const {
   DEFAULT_SPLIT_RATIO,
   EXPORT_FORMATS,
@@ -55,7 +55,8 @@ function validateExportParams(params) {
     }
     
     const sum = (train || 0) + (val || 0) + (test || 0);
-    if (Math.abs(sum - 1.0) > 0.001) {
+    // Allow sum = 0 (no split, all in train) or sum = 1.0 (valid split)
+    if (sum > 0 && Math.abs(sum - 1.0) > 0.001) {
       throw new Error(`${ERROR_CODES.INVALID_SPLIT_RATIO}: Split ratios must sum to 1.0, got ${sum}`);
     }
   }
@@ -156,8 +157,21 @@ async function exportDataset(req, res) {
     
     console.log('Starting dataset export:', exportParams);
     
-    // Generate dataset (sync for now, async with queue for large exports in future)
-    const result = await generateYOLODataset(exportParams);
+    // Generate dataset based on format
+    let result;
+    if (format === EXPORT_FORMATS.COCO) {
+      result = await generateCOCODataset(exportParams);
+    } else if (format === EXPORT_FORMATS.BOTH) {
+      // Export both formats
+      const yoloResult = await generateYOLODataset(exportParams);
+      const cocoResult = await generateCOCODataset(exportParams);
+      // Merge results (for now, return YOLO as primary)
+      result = yoloResult;
+      result.alsoGenerated = 'coco';
+    } else {
+      // Default to YOLO
+      result = await generateYOLODataset(exportParams);
+    }
     
     const { exportId, zipPath, stats } = result;
     

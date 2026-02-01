@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { getPatients, searchPatients, deletePatient } from '../api'
 import PatientForm from './PatientForm'
@@ -20,8 +20,17 @@ function PatientList() {
   const sortBy = searchParams.get('sortBy') || 'name_id'
   const sortOrder = searchParams.get('sortOrder') || 'DESC'
   
+  // Local state for search input (separate from URL params)
+  const [searchInput, setSearchInput] = useState(searchQuery)
+  const debounceRef = useRef(null)
+  
   const [totalPages, setTotalPages] = useState(0)
   const [total, setTotal] = useState(0)
+
+  // Sync searchInput when URL search param changes (e.g., browser back/forward)
+  useEffect(() => {
+    setSearchInput(searchQuery)
+  }, [searchQuery])
 
   useEffect(() => {
     loadPatients()
@@ -54,17 +63,35 @@ function PatientList() {
 
   const handleSearch = (e) => {
     const query = e.target.value
-    const newParams = new URLSearchParams(searchParams)
+    setSearchInput(query) // Update local state immediately (keeps input responsive)
     
-    if (query) {
-      newParams.set('search', query)
-    } else {
-      newParams.delete('search')
+    // Debounce the URL update
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current)
     }
-    newParams.set('page', '1') // Reset to page 1
     
-    setSearchParams(newParams)
+    debounceRef.current = setTimeout(() => {
+      const newParams = new URLSearchParams(searchParams)
+      
+      if (query) {
+        newParams.set('search', query)
+      } else {
+        newParams.delete('search')
+      }
+      newParams.set('page', '1') // Reset to page 1
+      
+      setSearchParams(newParams)
+    }, 400) // 400ms debounce
   }
+  
+  // Cleanup debounce on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current)
+      }
+    }
+  }, [])
 
   const handleDelete = async (id) => {
     if (!window.confirm('Bạn có chắc muốn xóa bệnh nhân này?')) return
@@ -142,12 +169,10 @@ function PatientList() {
       </div>
 
       {/* Search bar */}
-      <div style={{ marginBottom: '20px', position: 'relative', maxWidth: '500px' }}>
+      <div style={{ marginBottom: '20px', position: 'relative', maxWidth: '500px', display: 'flex', alignItems: 'center' }}>
         <FiSearch size={18} style={{ 
           position: 'absolute', 
           left: '14px', 
-          top: '50%', 
-          transform: 'translateY(-50%)', 
           color: 'var(--text-sub)',
           pointerEvents: 'none'
         }} />
@@ -155,9 +180,9 @@ function PatientList() {
           type="text"
           className="search-box"
           placeholder="Tìm kiếm theo tên hoặc số điện thoại..."
-          value={searchQuery}
+          value={searchInput}
           onChange={handleSearch}
-          style={{ width: '100%', paddingLeft: '42px' }}
+          style={{ width: '100%', paddingLeft: '42px', marginBottom: 0 }}
         />
       </div>
 

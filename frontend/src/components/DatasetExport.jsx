@@ -132,7 +132,8 @@ function DatasetExport() {
 
   const validateSplitRatio = () => {
     const sum = config.splitRatio.train + config.splitRatio.val + config.splitRatio.test;
-    return Math.abs(sum - 1.0) < 0.001;
+    // Allow sum = 0 (no split, all in train) or sum = 1.0 (valid split)
+    return sum === 0 || Math.abs(sum - 1.0) < 0.01;
   };
 
   const handleExport = async () => {

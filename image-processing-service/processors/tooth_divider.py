@@ -22,7 +22,8 @@ class ToothDivider:
     """
     
     # Cấu hình mặc định
-    BRACKET_CLASS = 13  # Nhãn của mắc cài cần loại bỏ
+    # YOLO class mapping: Teeth 0-19, Brace 21
+    BRACKET_CLASS = 21  # Nhãn của mắc cài (YOLO class 21 = COCO category_id 21)
     COLOR_GREEN = (50, 205, 50)   # Vùng Label 0 (không có mảng bám) - Lime Green
     COLOR_RED = (255, 0, 0)       # Vùng Label 1 (có mảng bám) - Bright Red
     COLOR_WHITE = (255, 255, 255) # Màu của Răng
@@ -30,7 +31,7 @@ class ToothDivider:
     PADDING_PX = 10  # Số pixel mở rộng cho khung răng khi vẽ
     BBOX_THICKNESS = 10  # Độ dày viền bounding box
     
-    def __init__(self, bracket_class=13, padding_px=10):
+    def __init__(self, bracket_class=21, padding_px=10):
         """
         Khởi tạo ToothDivider
         

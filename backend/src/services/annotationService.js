@@ -221,26 +221,34 @@ function convertCOCOToYOLO(cocoAnnotations, imageWidth, imageHeight) {
 }
 
 /**
+ * COCO Category Mapping (chuẩn)
+ * Teeth: category_id 1-20 → YOLO class 0-19
+ * Brace: category_id 21 → YOLO class 21 (giữ nguyên)
+ */
+const TOOTH_ORDER = [
+  '11', '12', '13', '14', '15',  // class 0-4
+  '21', '22', '23', '24', '25',  // class 5-9
+  '31', '32', '33', '34', '35',  // class 10-14
+  '41', '42', '43', '44', '45'   // class 15-19
+];
+const BRACE_CLASS = 21;
+
+/**
  * Map COCO category name sang YOLO class ID
  * @param {string} categoryName - Tên category từ COCO (tooth number hoặc 'Brace')
  * @returns {number} - YOLO class ID
  */
 function getCategoryYOLOClass(categoryName) {
-  // Map COCO category names to YOLO class IDs
-  // Tooth numbers: 11-14, 21-24, 31-34, 41-44
-  // Brace/bracket: class 13
-  const mapping = {
-    '11': 0, '12': 1, '13': 2, '14': 3,
-    '21': 4, '22': 5, '23': 6, '24': 7,
-    '31': 8, '32': 9, '33': 10, '34': 11,
-    '41': 12, '43': 14, '44': 15,
-    'Brace': 13,
-    'brace': 13,
-    'bracket': 13,
-    'Bracket': 13
-  };
+  const lowerName = (categoryName || '').toString().toLowerCase();
   
-  return mapping[categoryName] !== undefined ? mapping[categoryName] : 0;
+  // Brace/bracket → class 20
+  if (lowerName === 'brace' || lowerName === 'bracket') {
+    return BRACE_CLASS;
+  }
+  
+  // Tooth → class 0-19 based on position in TOOTH_ORDER
+  const index = TOOTH_ORDER.indexOf(categoryName?.toString());
+  return index >= 0 ? index : 0;
 }
 
 /**
@@ -351,8 +359,16 @@ function convertSubboxesToYOLO(subboxes, imageWidth, imageHeight) {
     // Get parent tooth YOLO class
     const parentToothClass = getCategoryYOLOClass(subbox.parent_category_name);
     
+    // Convert plaque_status to class_id (0 = no_plaque, 1 = has_plaque)
+    let class_id = 0;
+    if (subbox.plaque_status === 'plaque' || subbox.plaque_status === 1 || subbox.plaque_status === true) {
+      class_id = 1;
+    } else if (subbox.plaque_status === 'no_plaque' || subbox.plaque_status === 0 || subbox.plaque_status === false) {
+      class_id = 0;
+    }
+    
     return {
-      class_id: subbox.plaque_status, // 0 = no_plaque, 1 = has_plaque
+      class_id: class_id,
       x_center: yoloCoords.x_center,
       y_center: yoloCoords.y_center,
       width: yoloCoords.width,
@@ -407,5 +423,7 @@ module.exports = {
   convertBboxToYOLOFormat,
   convertSubboxesToYOLO,
   formatYOLOSubboxText,
-  validateYOLOCoordinates
+  validateYOLOCoordinates,
+  TOOTH_ORDER,
+  BRACE_CLASS
 };

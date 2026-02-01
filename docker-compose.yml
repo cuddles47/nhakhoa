@@ -49,7 +49,7 @@ services:
       HOST: 0.0.0.0
       PORT: 8001
       DEBUG: ${IMAGE_PROCESSOR_DEBUG:-False}
-      BRACKET_CLASS: ${BRACKET_CLASS:-13}
+      BRACKET_CLASS: ${BRACKET_CLASS:-21}
       PADDING_PX: ${PADDING_PX:-10}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
     ports:

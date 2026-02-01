@@ -127,22 +127,34 @@ class Annotation {
   }
 
   /**
+   * COCO Category Mapping (chuẩn)
+   * Teeth: category_id 1-20 → YOLO class 0-19
+   * Brace: category_id 21 → YOLO class 21 (giữ nguyên)
+   */
+  static TOOTH_ORDER = [
+    '11', '12', '13', '14', '15',  // class 0-4
+    '21', '22', '23', '24', '25',  // class 5-9
+    '31', '32', '33', '34', '35',  // class 10-14
+    '41', '42', '43', '44', '45'   // class 15-19
+  ];
+  static BRACE_CLASS = 21;
+
+  /**
    * Map COCO category name sang YOLO class ID
    * @param {string} categoryName - Tên category từ COCO
    * @returns {number} - YOLO class ID
    */
   static getCategoryYOLOClass(categoryName) {
-    const mapping = {
-      '11': 0, '12': 1, '13': 2, '14': 3,
-      '21': 4, '22': 5, '23': 6, '24': 7,
-      '31': 8, '32': 9, '33': 10, '34': 11,
-      '41': 12, '43': 14, '44': 15,
-      'Brace': 13,
-      'brace': 13,
-      'bracket': 13,
-      'Bracket': 13
-    };
-    return mapping[categoryName] !== undefined ? mapping[categoryName] : 0;
+    const lowerName = (categoryName || '').toString().toLowerCase();
+    
+    // Brace/bracket → class 20
+    if (lowerName === 'brace' || lowerName === 'bracket') {
+      return Annotation.BRACE_CLASS;
+    }
+    
+    // Tooth → class 0-19 based on position in TOOTH_ORDER
+    const index = Annotation.TOOTH_ORDER.indexOf(categoryName?.toString());
+    return index >= 0 ? index : 0;
   }
 
   /**
