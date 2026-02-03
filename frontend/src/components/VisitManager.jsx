@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { getPatientById, getVisitsByPatient, createVisit, updateVisit } from '../api'
-import { FiPlus, FiArrowLeft, FiImage, FiX, FiClock, FiLoader, FiCheckCircle, FiAlertCircle } from 'react-icons/fi'
+import { FiPlus, FiArrowLeft, FiImage, FiX, FiClock, FiLoader, FiCheckCircle, FiAlertCircle, FiRefreshCw } from 'react-icons/fi'
 
 function VisitManager() {
   const { patientId } = useParams()
   const navigate = useNavigate()
+  const location = useLocation()
   
   const [patient, setPatient] = useState(null)
   const [visits, setVisits] = useState([])
@@ -79,6 +80,31 @@ function VisitManager() {
     )
   }
 
+  const getReprocessBadge = (reprocessedAt) => {
+    if (!reprocessedAt) {
+      return (
+        <span className="badge badge-secondary" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <FiAlertCircle size={12} />
+          Chưa xử lý
+        </span>
+      )
+    }
+    
+    const date = new Date(reprocessedAt)
+    const formattedDate = date.toLocaleDateString('vi-VN', { 
+      day: '2-digit', 
+      month: '2-digit', 
+      year: 'numeric'
+    })
+    
+    return (
+      <span className="badge badge-success" style={{ display: 'flex', alignItems: 'center', gap: '4px' }} title={`Xử lý lại lúc: ${date.toLocaleString('vi-VN')}`}>
+        <FiRefreshCw size={12} />
+        {formattedDate}
+      </span>
+    )
+  }
+
   if (loading) {
     return <div className="loading">Đang tải...</div>
   }
@@ -87,7 +113,7 @@ function VisitManager() {
     return (
       <div className="card">
         <p style={{ color: 'var(--error)' }}>{error || 'Không tìm thấy bệnh nhân'}</p>
-        <button className="button" onClick={() => navigate('/patients')} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <button className="button" onClick={() => navigate('/patients' + (location.state?.previousSearch || ''))} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
           <FiArrowLeft size={16} />
           Quay lại
         </button>
@@ -115,7 +141,7 @@ function VisitManager() {
           </button>
           <button 
             className="button-secondary button"
-            onClick={() => navigate('/patients')}
+            onClick={() => navigate('/patients' + (location.state?.previousSearch || ''))}
             style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
           >
             <FiArrowLeft size={18} />
@@ -133,6 +159,7 @@ function VisitManager() {
               <th>ID</th>
               <th>Ngày Khám</th>
               <th>Trạng Thái</th>
+              <th>Đã xử lý lại</th>
               <th>Ghi Chú</th>
               <th>Hành Động</th>
             </tr>
@@ -143,6 +170,7 @@ function VisitManager() {
                 <td>{visit.id}</td>
                 <td>{new Date(visit.visit_date).toLocaleDateString('vi-VN')}</td>
                 <td>{getStatusBadge(visit.status)}</td>
+                <td>{getReprocessBadge(visit.reprocessed_at)}</td>
                 <td>{visit.notes || '-'}</td>
                 <td>
                   <button 

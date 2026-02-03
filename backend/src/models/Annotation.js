@@ -116,7 +116,7 @@ class Annotation {
       const height_norm = h / imageHeight;
       
       return {
-        class_id: this.getCategoryYOLOClass(ann.category_name),
+        class_id: this.getCategoryYOLOClass(ann.category_id),
         x_center,
         y_center,
         width: width_norm,
@@ -127,34 +127,20 @@ class Annotation {
   }
 
   /**
-   * COCO Category Mapping (chuẩn)
-   * Teeth: category_id 1-20 → YOLO class 0-19
-   * Brace: category_id 21 → YOLO class 21 (giữ nguyên)
+   * COCO Category Mapping
+   * YOLO class = COCO category_id (giữ nguyên)
+   * Teeth: category_id 1-20 → YOLO class 1-20
+   * Brace: category_id 21 → YOLO class 21
    */
-  static TOOTH_ORDER = [
-    '11', '12', '13', '14', '15',  // class 0-4
-    '21', '22', '23', '24', '25',  // class 5-9
-    '31', '32', '33', '34', '35',  // class 10-14
-    '41', '42', '43', '44', '45'   // class 15-19
-  ];
-  static BRACE_CLASS = 21;
 
   /**
-   * Map COCO category name sang YOLO class ID
-   * @param {string} categoryName - Tên category từ COCO
-   * @returns {number} - YOLO class ID
+   * Map COCO category_id sang YOLO class ID
+   * @param {number} categoryId - Category ID từ COCO
+   * @returns {number} - YOLO class ID (giống category_id)
    */
-  static getCategoryYOLOClass(categoryName) {
-    const lowerName = (categoryName || '').toString().toLowerCase();
-    
-    // Brace/bracket → class 20
-    if (lowerName === 'brace' || lowerName === 'bracket') {
-      return Annotation.BRACE_CLASS;
-    }
-    
-    // Tooth → class 0-19 based on position in TOOTH_ORDER
-    const index = Annotation.TOOTH_ORDER.indexOf(categoryName?.toString());
-    return index >= 0 ? index : 0;
+  static getCategoryYOLOClass(categoryId) {
+    // YOLO class = COCO category_id (giữ nguyên)
+    return categoryId || 0;
   }
 
   /**
@@ -268,15 +254,14 @@ class Annotation {
       WHERE i.visit_id = ANY($1)
         AND i.deleted_at IS NULL
         AND i.image_category = 'raw'
-        AND i.has_annotations = true
       GROUP BY i.id
     `;
     
     // Add filters based on annotation status
     if (annotationStatus === 'full') {
       query += `
-        HAVING COUNT(DISTINCT subbox.id) > 0 
-        AND COUNT(DISTINCT CASE WHEN subbox.plaque_status IS NOT NULL THEN subbox.id END) = COUNT(DISTINCT subbox.id)
+        HAVING (COUNT(DISTINCT subbox.id) = 0) 
+        OR (COUNT(DISTINCT subbox.id) > 0 AND COUNT(DISTINCT CASE WHEN subbox.plaque_status IS NOT NULL THEN subbox.id END) = COUNT(DISTINCT subbox.id))
       `;
     } else if (annotationStatus === 'partial') {
       query += `

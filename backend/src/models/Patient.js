@@ -11,25 +11,25 @@ class Patient {
         
         if (search) {
             whereConditions.push(`(
-                name ILIKE $${paramIndex} OR 
-                phone ILIKE $${paramIndex} OR 
-                CAST(id AS TEXT) ILIKE $${paramIndex} OR 
-                COALESCE(notes, '') ILIKE $${paramIndex}
+                p.name ILIKE $${paramIndex} OR 
+                p.phone ILIKE $${paramIndex} OR 
+                CAST(p.id AS TEXT) ILIKE $${paramIndex} OR 
+                COALESCE(p.notes, '') ILIKE $${paramIndex}
             )`);
             params.push(`%${search}%`);
             paramIndex++;
         }
         
         if (status) {
-            whereConditions.push(`status = $${paramIndex}`);
+            whereConditions.push(`p.status = $${paramIndex}`);
             params.push(status);
             paramIndex++;
         }
         
         // Add soft delete filter
-        whereConditions.push('deleted_at IS NULL');
+        whereConditions.push('p.deleted_at IS NULL');
         
-        const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
+        const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
         
         // Extract number from name pattern "Bệnh Nhân #XXXX" for sorting
         // Use NULLIF to handle cases where extraction fails, fallback to id
@@ -41,21 +41,32 @@ class Patient {
         if (validSortBy === 'name_id') {
             orderByClause = `ORDER BY 
                 COALESCE(
-                    NULLIF(regexp_replace(name, '[^0-9]', '', 'g'), '')::integer,
-                    id
+                    NULLIF(regexp_replace(p.name, '[^0-9]', '', 'g'), '')::integer,
+                    p.id
                 ) ${validSortOrder}`;
         } else {
-            orderByClause = `ORDER BY ${validSortBy} ${validSortOrder}`;
+            orderByClause = `ORDER BY p.${validSortBy} ${validSortOrder}`;
         }
         
         // Get total count
-        const countQuery = `SELECT COUNT(*) FROM patients ${whereClause}`;
+        const countQuery = `SELECT COUNT(*) FROM patients p ${whereClause}`;
         const countResult = await db.query(countQuery, params);
         const total = parseInt(countResult.rows[0].count);
         
-        // Get paginated data
+        // Get paginated data with visit reprocessing stats
         params.push(limit, offset);
-        const dataQuery = `SELECT * FROM patients ${whereClause} ${orderByClause} LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+        const dataQuery = `
+            SELECT 
+                p.*,
+                COUNT(v.id)::int as total_visits,
+                COUNT(v.id) FILTER (WHERE v.reprocessed_at IS NOT NULL)::int as reprocessed_visits
+            FROM patients p
+            LEFT JOIN visits v ON v.patient_id = p.id AND v.deleted_at IS NULL
+            ${whereClause}
+            GROUP BY p.id
+            ${orderByClause}
+            LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+        `;
         const dataResult = await db.query(dataQuery, params);
         
         return {

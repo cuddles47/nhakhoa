@@ -282,12 +282,8 @@ async function generateYOLODataset(params) {
           }
           
           const subboxes = subboxesByImage[imageId] || [];
-          if (subboxes.length === 0) {
-            console.warn(`Image ${imageId} has no subboxes, skipping`);
-            skippedCount++;
-            continue;
-          }
           
+          // Allow images with no subboxes (negative samples - no objects in image)
           console.log(`Processing image ${imageId}: ${image.original_filename}, subboxes: ${subboxes.length}`);
           
           // Sanitize filename
@@ -300,6 +296,17 @@ async function generateYOLODataset(params) {
           console.log(`Downloading from ${image.url} to ${imageDest}`);
           await downloadImage(image.url, imageDest);
           
+          // If no subboxes, create empty label file (negative sample)
+          if (subboxes.length === 0) {
+            const labelDest = path.join(exportDir, 'labels', splitName, `${baseName}.txt`);
+            await fs.writeFile(labelDest, ''); // Empty file = no objects
+            console.log(`Created empty label file for negative sample: ${labelDest}`);
+            processedCount++;
+            stats.totalImages++;
+            stats.splits[splitName]++;
+            continue;
+          }
+
           // Convert subboxes to YOLO format
           const yoloSubboxes = convertSubboxesToYOLO(subboxes, image.width, image.height);
           
@@ -412,7 +419,9 @@ model.train(data='data.yaml', epochs=100, imgsz=640)
     
     // 8. Create ZIP archive
     console.log('Creating ZIP archive...');
-    const zipPath = path.join(TEMP_DIR_PATH, `${exportId}.zip`);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19); // 2026-02-01T12-34-56
+    const zipFilename = `${exportId}_${timestamp}.zip`;
+    const zipPath = path.join(TEMP_DIR_PATH, zipFilename);
     await createZipArchive(exportDir, zipPath);
     
     // 9. Cleanup export directory
@@ -595,12 +604,8 @@ async function generateCOCODataset(params) {
           }
           
           const subboxes = subboxesByImage[imageId] || [];
-          if (subboxes.length === 0) {
-            console.warn(`Image ${imageId} has no subboxes, skipping`);
-            skippedCount++;
-            continue;
-          }
           
+          // Allow images with no subboxes (negative samples)
           console.log(`Processing image ${imageId}: ${image.original_filename}, subboxes: ${subboxes.length}`);
           
           // Sanitize filename
@@ -623,6 +628,9 @@ async function generateCOCODataset(params) {
             license: 1,
             date_captured: image.created_at || new Date().toISOString()
           });
+          
+          // If no subboxes, image has no annotations (negative sample)
+          // Just add image entry, no annotations will be added below
           
           // Convert subboxes to COCO annotations
           for (const subbox of subboxes) {
@@ -761,7 +769,9 @@ anns = coco_train.loadAnns(ann_ids)
     
     // 7. Create ZIP archive
     console.log('Creating ZIP archive...');
-    const zipPath = path.join(TEMP_DIR_PATH, `${exportId}.zip`);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19); // 2026-02-01T12-34-56
+    const zipFilename = `${exportId}_${timestamp}.zip`;
+    const zipPath = path.join(TEMP_DIR_PATH, zipFilename);
     await createZipArchive(exportDir, zipPath);
     
     // 8. Cleanup export directory

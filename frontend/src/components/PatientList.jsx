@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { getPatients, searchPatients, deletePatient } from '../api'
 import PatientForm from './PatientForm'
 import toast from 'react-hot-toast';
-import { FiPlus, FiSearch, FiEye, FiTrash2, FiChevronLeft, FiChevronRight, FiChevronsLeft, FiChevronsRight, FiX, FiArrowUp, FiArrowDown } from 'react-icons/fi'
+import { FiPlus, FiSearch, FiEye, FiTrash2, FiChevronLeft, FiChevronRight, FiChevronsLeft, FiChevronsRight, FiX, FiArrowUp, FiArrowDown, FiRefreshCw, FiAlertCircle, FiCheckCircle } from 'react-icons/fi'
 
 function PatientList() {
   const navigate = useNavigate()
@@ -92,6 +92,39 @@ function PatientList() {
       }
     }
   }, [])
+
+  const getReprocessBadge = (totalVisits, reprocessedVisits) => {
+    if (totalVisits === 0) {
+      return (
+        <span className="badge badge-secondary" style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}>
+          Chưa có lần khám
+        </span>
+      )
+    }
+    
+    if (reprocessedVisits === 0) {
+      return (
+        <span className="badge badge-warning" style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}>
+          <FiAlertCircle size={12} />
+          0/{totalVisits}
+        </span>
+      )
+    } else if (reprocessedVisits === totalVisits) {
+      return (
+        <span className="badge badge-success" style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}>
+          <FiCheckCircle size={12} />
+          {reprocessedVisits}/{totalVisits}
+        </span>
+      )
+    } else {
+      return (
+        <span className="badge badge-info" style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}>
+          <FiRefreshCw size={12} />
+          {reprocessedVisits}/{totalVisits}
+        </span>
+      )
+    }
+  }
 
   const handleDelete = async (id) => {
     if (!window.confirm('Bạn có chắc muốn xóa bệnh nhân này?')) return
@@ -229,6 +262,7 @@ function PatientList() {
                 Ngày Sinh {getSortIcon('dob')}
               </div>
             </th>
+            <th>Đã xử lý lại</th>
             <th>Hành Động</th>
           </tr>
         </thead>
@@ -240,10 +274,11 @@ function PatientList() {
               <td>{patient.phone}</td>
               <td>{patient.gender === 'male' ? 'Nam' : patient.gender === 'female' ? 'Nữ' : '-'}</td>
               <td>{patient.dob ? new Date(patient.dob).toLocaleDateString('vi-VN') : '-'}</td>
+              <td>{getReprocessBadge(parseInt(patient.total_visits) || 0, parseInt(patient.reprocessed_visits) || 0)}</td>
               <td className="action-buttons">
                 <button 
                   className="icon-button"
-                  onClick={() => navigate(`/patients/${patient.id}/visits`)}
+                  onClick={() => navigate(`/patients/${patient.id}/visits`, { state: { previousSearch: '?' + searchParams.toString() } })}
                   title="Xem lần khám"
                   style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
                 >

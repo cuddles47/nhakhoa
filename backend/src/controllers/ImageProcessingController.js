@@ -189,6 +189,9 @@ class ImageProcessingController {
       await Promise.all(updatePromises);
       await Promise.all(annotationPromises);
       
+      // Mark visit as reprocessed
+      await Visit.markAsReprocessed(visitId, req.user?.id);
+      
       await fs.rm(tempDir, { recursive: true, force: true });
 
       const updatedImages = await Image.findByVisitId(visitId);

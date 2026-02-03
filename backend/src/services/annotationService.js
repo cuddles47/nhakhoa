@@ -194,7 +194,7 @@ function matchFilenameToAnnotations(uploadedFilename, imageMap) {
 
 /**
  * Convert COCO bbox sang YOLO format
- * @param {Array} cocoAnnotations - Array of { category_name, bbox: [x, y, w, h] }
+ * @param {Array} cocoAnnotations - Array of { category_id, category_name, bbox: [x, y, w, h] }
  * @param {number} imageWidth - Width của ảnh (pixels)
  * @param {number} imageHeight - Height của ảnh (pixels)
  * @returns {Array} - Array of { class_id, x_center, y_center, width, height, category_name }
@@ -210,7 +210,7 @@ function convertCOCOToYOLO(cocoAnnotations, imageWidth, imageHeight) {
     const height_norm = h / imageHeight;
     
     return {
-      class_id: getCategoryYOLOClass(ann.category_name),
+      class_id: getCategoryYOLOClass(ann.category_id),
       x_center,
       y_center,
       width: width_norm,
@@ -221,34 +221,20 @@ function convertCOCOToYOLO(cocoAnnotations, imageWidth, imageHeight) {
 }
 
 /**
- * COCO Category Mapping (chuẩn)
- * Teeth: category_id 1-20 → YOLO class 0-19
- * Brace: category_id 21 → YOLO class 21 (giữ nguyên)
+ * COCO Category Mapping
+ * YOLO class = COCO category_id (giữ nguyên)
+ * Teeth: category_id 1-20 → YOLO class 1-20
+ * Brace: category_id 21 → YOLO class 21
  */
-const TOOTH_ORDER = [
-  '11', '12', '13', '14', '15',  // class 0-4
-  '21', '22', '23', '24', '25',  // class 5-9
-  '31', '32', '33', '34', '35',  // class 10-14
-  '41', '42', '43', '44', '45'   // class 15-19
-];
-const BRACE_CLASS = 21;
 
 /**
- * Map COCO category name sang YOLO class ID
- * @param {string} categoryName - Tên category từ COCO (tooth number hoặc 'Brace')
- * @returns {number} - YOLO class ID
+ * Map COCO category_id sang YOLO class ID
+ * @param {number} categoryId - Category ID từ COCO
+ * @returns {number} - YOLO class ID (giống category_id)
  */
-function getCategoryYOLOClass(categoryName) {
-  const lowerName = (categoryName || '').toString().toLowerCase();
-  
-  // Brace/bracket → class 20
-  if (lowerName === 'brace' || lowerName === 'bracket') {
-    return BRACE_CLASS;
-  }
-  
-  // Tooth → class 0-19 based on position in TOOTH_ORDER
-  const index = TOOTH_ORDER.indexOf(categoryName?.toString());
-  return index >= 0 ? index : 0;
+function getCategoryYOLOClass(categoryId) {
+  // YOLO class = COCO category_id (giữ nguyên)
+  return categoryId || 0;
 }
 
 /**
@@ -347,7 +333,7 @@ function convertBboxToYOLOFormat(bbox, imageWidth, imageHeight) {
 
 /**
  * Convert subboxes to YOLO format (6-field: class x y w h parent_tooth_class)
- * @param {Array} subboxes - Array of subbox objects with bbox, plaque_status, parent info
+ * @param {Array} subboxes - Array of subbox objects with bbox, plaque_status, parent_category_id
  * @param {number} imageWidth - Image width in pixels
  * @param {number} imageHeight - Image height in pixels
  * @returns {Array} - Array of YOLO annotation objects
@@ -356,8 +342,8 @@ function convertSubboxesToYOLO(subboxes, imageWidth, imageHeight) {
   return subboxes.map(subbox => {
     const yoloCoords = convertBboxToYOLOFormat(subbox.bbox, imageWidth, imageHeight);
     
-    // Get parent tooth YOLO class
-    const parentToothClass = getCategoryYOLOClass(subbox.parent_category_name);
+    // Get parent tooth YOLO class from category_id
+    const parentToothClass = getCategoryYOLOClass(subbox.parent_category_id);
     
     // Convert plaque_status to class_id (0 = no_plaque, 1 = has_plaque)
     let class_id = 0;
@@ -423,7 +409,5 @@ module.exports = {
   convertBboxToYOLOFormat,
   convertSubboxesToYOLO,
   formatYOLOSubboxText,
-  validateYOLOCoordinates,
-  TOOTH_ORDER,
-  BRACE_CLASS
+  validateYOLOCoordinates
 };
