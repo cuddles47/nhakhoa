@@ -61,9 +61,7 @@ function ImageUpload() {
           path = url.replace(/^\/nhakhoa\//, '');
         }
         
-        // Add cache buster timestamp to force reload
-        const proxyUrl = `${API_URL}/api/images/proxy/${path}?t=${Date.now()}`;
-        console.log('🔄 URL conversion:', { original: url, proxy: proxyUrl });
+        const proxyUrl = `${API_URL}/api/images/proxy/${path}`;
         return proxyUrl;
       };
       
@@ -117,8 +115,7 @@ function ImageUpload() {
           path = url.replace(/^\/nhakhoa\//, '');
         }
         
-        // Add cache buster timestamp to force reload
-        return `${API_URL}/api/images/proxy/${path}?t=${Date.now()}`;
+        return `${API_URL}/api/images/proxy/${path}`;
       };
       
       const allImagesWithProxy = allImages.map(img => ({
@@ -147,15 +144,29 @@ function ImageUpload() {
       const result = await imageService.processImages(visitId);
       
       if (result.success) {
-        setProcessedImages(result.data);
-        // Reload all images to get updated URLs
-        await loadImages();
+        toast.success('Đã enqueue job xử lý ảnh');
+        
+        const { promise: pollPromise, stop } = imageService.pollProcessingStatus(
+          visitId,
+          (statusData) => {
+            console.log('Processing status:', statusData);
+          }
+        );
+        
+        const finalStatus = await pollPromise;
+        
+        if (finalStatus.status === 'completed') {
+          toast.success('Xử lý ảnh thành công!');
+          await loadImages();
+          return { success: true };
+        } else if (finalStatus.status === 'failed') {
+          throw new Error(finalStatus.errorMessage || 'Xử lý ảnh thất bại');
+        }
       }
       
       return result;
     } catch (err) {
-      // ...existing code...
-      throw new Error(err.response?.data?.error || 'Không thể xử lý ảnh');
+      throw new Error(err.response?.data?.error || err.message || 'Không thể xử lý ảnh');
     }
   }
 
@@ -313,6 +324,7 @@ function ImageUpload() {
                     <img 
                       src={image.url} 
                       alt={pos.label}
+                      loading="lazy"
                       style={{ 
                         maxWidth: '100%',
                         maxHeight: '100%',

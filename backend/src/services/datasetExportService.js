@@ -166,15 +166,22 @@ function extractObjectName(url) {
 }
 
 /**
- * Download image from MinIO
+ * Download image from MinIO using stream to avoid loading entire file into memory
  * @param {string} url - MinIO URL
  * @param {string} destPath - Destination file path
  */
 async function downloadImage(url, destPath) {
   try {
     const objectName = extractObjectName(url);
-    const buffer = await storage.downloadFile(objectName);
-    await fs.writeFile(destPath, buffer);
+    const stream = await storage.streamFile(objectName);
+    const writeStream = require('fs').createWriteStream(destPath);
+    
+    await new Promise((resolve, reject) => {
+      stream.pipe(writeStream);
+      writeStream.on('finish', resolve);
+      writeStream.on('error', reject);
+      stream.on('error', reject);
+    });
   } catch (error) {
     console.error(`Failed to download image ${url}:`, error.message);
     throw error;

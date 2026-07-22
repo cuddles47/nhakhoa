@@ -11,7 +11,7 @@ const annotationController = require('../controllers/AnnotationController');
 const exportController = require('../controllers/ExportController');
 const indexController = require('../controllers/index');
 const validate = require('../middleware/validate');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, optionalAuth } = require('../middleware/auth');
 const patientSchemas = require('../validators/patientValidator');
 const visitSchemas = require('../validators/visitValidator');
 const imageSchemas = require('../validators/imageValidator');
@@ -80,8 +80,8 @@ router.get('/api/visits/:visitId/stained-upload-status', bulkUploadController.ge
 router.get('/api/patients/:patientId/available-visits', bulkUploadController.getAvailableVisitsForStained);
 
 // Image processing routes
-router.post('/api/visits/:visitId/process-images', imageProcessingController.processRawImages);
-router.get('/api/visits/:visitId/processing-status', imageProcessingController.getProcessingStatus);
+router.post('/api/visits/:visitId/process-images', authenticate, imageProcessingController.processRawImages);
+router.get('/api/visits/:visitId/processing-status', authenticate, imageProcessingController.getProcessingStatus);
 
 // Annotation routes
 router.get('/api/images/:imageId/annotations', annotationController.getImageAnnotations);
@@ -96,28 +96,38 @@ router.get('/api/exports/:exportId/download', authenticate, exportController.dow
 router.delete('/api/exports/:exportId', authenticate, exportController.deleteExport);
 
 // Proxy route for MinIO images (to avoid CORS issues)
-router.get('/api/images/proxy/*', async (req, res) => {
+router.get('/api/images/proxy/*', optionalAuth, async (req, res) => {
   try {
-    const objectName = req.params[0]; // Everything after /api/images/proxy/
-    console.log('Proxying image request for:', objectName);
+    const objectName = req.params[0];
     
     const storageService = require('../services/storage');
-    const imageBuffer = await storageService.downloadFile(objectName);
+    const stat = await storageService.getFileStat(objectName);
     
-    // Set appropriate content type based on file extension
     const ext = objectName.split('.').pop().toLowerCase();
     const contentType = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : 
                        ext === 'png' ? 'image/png' : 'image/jpeg';
     
-    // Set CORS headers explicitly for image proxy
-    res.set('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.set('Access-Control-Allow-Origin', process.env.FRONTEND_URL || 'http://localhost:4004');
     res.set('Access-Control-Allow-Credentials', 'true');
     res.set('Content-Type', contentType);
-    res.set('Cache-Control', 'public, max-age=3600');
-    res.send(imageBuffer);
+    res.set('Cache-Control', 'public, max-age=86400, immutable');
+    
+    if (stat && stat.etag) {
+      res.set('ETag', `"${stat.etag}"`);
+    }
+    
+    const ifNoneMatch = req.headers['if-none-match'];
+    if (ifNoneMatch && stat && ifNoneMatch === `"${stat.etag}"`) {
+      return res.status(304).end();
+    }
+    
+    const stream = await storageService.streamFile(objectName);
+    stream.pipe(res);
   } catch (error) {
     console.error('Error proxying image:', error);
-    res.status(404).json({ error: 'Image not found' });
+    if (!res.headersSent) {
+      res.status(404).json({ error: 'Image not found' });
+    }
   }
 });
 

@@ -410,6 +410,7 @@ const ProcessedImageViewer = ({
                 <img 
                   src={imageUrl} 
                   alt={pos.label}
+                  loading="lazy"
                   style={{ 
                     maxWidth: '100%',
                     maxHeight: '100%',

@@ -148,6 +148,27 @@ const downloadFile = async (objectName) => {
   }
 };
 
+const streamFile = async (objectName) => {
+  return new Promise((resolve, reject) => {
+    minioClient.getObject(BUCKET_NAME, objectName, (err, dataStream) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve(dataStream);
+    });
+  });
+};
+
+const getFileStat = async (objectName) => {
+  try {
+    const stat = await minioClient.statObject(BUCKET_NAME, objectName);
+    return stat;
+  } catch (err) {
+    return null;
+  }
+};
+
 // Upload from buffer
 const uploadFromBuffer = async (buffer, objectName, contentType = 'application/octet-stream') => {
   try {
@@ -231,8 +252,10 @@ module.exports = {
   deleteFile,
   deleteFiles,
   downloadFile,
+  streamFile,
   ensureBucket,
   ensureUploadByHash,
   computeHash,
-  objectExists
+  objectExists,
+  getFileStat
 };
