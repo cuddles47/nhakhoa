@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { getPatients, searchPatients, deletePatient } from '../api'
 import PatientForm from './PatientForm'
 import toast from 'react-hot-toast';
-import { FiPlus, FiSearch, FiEye, FiTrash2, FiChevronLeft, FiChevronRight, FiChevronsLeft, FiChevronsRight, FiX } from 'react-icons/fi'
+import { FiPlus, FiSearch, FiEye, FiTrash2, FiChevronLeft, FiChevronRight, FiChevronsLeft, FiChevronsRight, FiX, FiArrowUp, FiArrowDown, FiRefreshCw, FiAlertCircle, FiCheckCircle } from 'react-icons/fi'
 
 function PatientList() {
   const navigate = useNavigate()
@@ -17,9 +17,20 @@ function PatientList() {
   const page = parseInt(searchParams.get('page')) || 1
   const limit = parseInt(searchParams.get('limit')) || 10
   const searchQuery = searchParams.get('search') || ''
+  const sortBy = searchParams.get('sortBy') || 'name_id'
+  const sortOrder = searchParams.get('sortOrder') || 'DESC'
+  
+  // Local state for search input (separate from URL params)
+  const [searchInput, setSearchInput] = useState(searchQuery)
+  const debounceRef = useRef(null)
   
   const [totalPages, setTotalPages] = useState(0)
   const [total, setTotal] = useState(0)
+
+  // Sync searchInput when URL search param changes (e.g., browser back/forward)
+  useEffect(() => {
+    setSearchInput(searchQuery)
+  }, [searchQuery])
 
   useEffect(() => {
     loadPatients()
@@ -30,7 +41,9 @@ function PatientList() {
       setLoading(true)
       const params = new URLSearchParams({
         page: page,
-        limit: limit
+        limit: limit,
+        sortBy: sortBy,
+        sortOrder: sortOrder
       })
       if (searchQuery) {
         params.append('search', searchQuery)
@@ -50,16 +63,67 @@ function PatientList() {
 
   const handleSearch = (e) => {
     const query = e.target.value
-    const newParams = new URLSearchParams(searchParams)
+    setSearchInput(query) // Update local state immediately (keeps input responsive)
     
-    if (query) {
-      newParams.set('search', query)
-    } else {
-      newParams.delete('search')
+    // Debounce the URL update
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current)
     }
-    newParams.set('page', '1') // Reset to page 1
     
-    setSearchParams(newParams)
+    debounceRef.current = setTimeout(() => {
+      const newParams = new URLSearchParams(searchParams)
+      
+      if (query) {
+        newParams.set('search', query)
+      } else {
+        newParams.delete('search')
+      }
+      newParams.set('page', '1') // Reset to page 1
+      
+      setSearchParams(newParams)
+    }, 400) // 400ms debounce
+  }
+  
+  // Cleanup debounce on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current)
+      }
+    }
+  }, [])
+
+  const getReprocessBadge = (totalVisits, reprocessedVisits) => {
+    if (totalVisits === 0) {
+      return (
+        <span className="badge badge-secondary" style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}>
+          Chưa có lần khám
+        </span>
+      )
+    }
+    
+    if (reprocessedVisits === 0) {
+      return (
+        <span className="badge badge-warning" style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}>
+          <FiAlertCircle size={12} />
+          0/{totalVisits}
+        </span>
+      )
+    } else if (reprocessedVisits === totalVisits) {
+      return (
+        <span className="badge badge-success" style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}>
+          <FiCheckCircle size={12} />
+          {reprocessedVisits}/{totalVisits}
+        </span>
+      )
+    } else {
+      return (
+        <span className="badge badge-info" style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}>
+          <FiRefreshCw size={12} />
+          {reprocessedVisits}/{totalVisits}
+        </span>
+      )
+    }
   }
 
   const handleDelete = async (id) => {
@@ -84,6 +148,26 @@ function PatientList() {
     newParams.set('limit', e.target.value)
     newParams.set('page', '1') // Reset to page 1
     setSearchParams(newParams)
+  }
+
+  const handleSort = (field) => {
+    const newParams = new URLSearchParams(searchParams)
+    
+    // Toggle sort order if clicking same field, otherwise default to DESC
+    if (sortBy === field) {
+      newParams.set('sortOrder', sortOrder === 'ASC' ? 'DESC' : 'ASC')
+    } else {
+      newParams.set('sortBy', field)
+      newParams.set('sortOrder', 'DESC')
+    }
+    newParams.set('page', '1') // Reset to page 1
+    
+    setSearchParams(newParams)
+  }
+
+  const getSortIcon = (field) => {
+    if (sortBy !== field) return null
+    return sortOrder === 'ASC' ? <FiArrowUp size={14} /> : <FiArrowDown size={14} />
   }
 
 
@@ -118,12 +202,10 @@ function PatientList() {
       </div>
 
       {/* Search bar */}
-      <div style={{ marginBottom: '20px', position: 'relative', maxWidth: '500px' }}>
+      <div style={{ marginBottom: '20px', position: 'relative', maxWidth: '500px', display: 'flex', alignItems: 'center' }}>
         <FiSearch size={18} style={{ 
           position: 'absolute', 
           left: '14px', 
-          top: '50%', 
-          transform: 'translateY(-50%)', 
           color: 'var(--text-sub)',
           pointerEvents: 'none'
         }} />
@@ -131,20 +213,56 @@ function PatientList() {
           type="text"
           className="search-box"
           placeholder="Tìm kiếm theo tên hoặc số điện thoại..."
-          value={searchQuery}
+          value={searchInput}
           onChange={handleSearch}
-          style={{ width: '100%', paddingLeft: '42px' }}
+          style={{ width: '100%', paddingLeft: '42px', marginBottom: 0 }}
         />
       </div>
 
       <table className="table">
         <thead>
           <tr>
-            <th>ID</th>
-            <th>Họ Tên</th>
-            <th>SĐT</th>
-            <th>Giới Tính</th>
-            <th>Ngày Sinh</th>
+            <th 
+              onClick={() => handleSort('id')} 
+              style={{ cursor: 'pointer', userSelect: 'none' }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                ID {getSortIcon('id')}
+              </div>
+            </th>
+            <th 
+              onClick={() => handleSort('name_id')} 
+              style={{ cursor: 'pointer', userSelect: 'none' }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                Họ Tên {getSortIcon('name_id')}
+              </div>
+            </th>
+            <th 
+              onClick={() => handleSort('phone')} 
+              style={{ cursor: 'pointer', userSelect: 'none' }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                SĐT {getSortIcon('phone')}
+              </div>
+            </th>
+            <th 
+              onClick={() => handleSort('gender')} 
+              style={{ cursor: 'pointer', userSelect: 'none' }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                Giới Tính {getSortIcon('gender')}
+              </div>
+            </th>
+            <th 
+              onClick={() => handleSort('dob')} 
+              style={{ cursor: 'pointer', userSelect: 'none' }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                Ngày Sinh {getSortIcon('dob')}
+              </div>
+            </th>
+            <th>Đã xử lý lại</th>
             <th>Hành Động</th>
           </tr>
         </thead>
@@ -156,10 +274,11 @@ function PatientList() {
               <td>{patient.phone}</td>
               <td>{patient.gender === 'male' ? 'Nam' : patient.gender === 'female' ? 'Nữ' : '-'}</td>
               <td>{patient.dob ? new Date(patient.dob).toLocaleDateString('vi-VN') : '-'}</td>
+              <td>{getReprocessBadge(parseInt(patient.total_visits) || 0, parseInt(patient.reprocessed_visits) || 0)}</td>
               <td className="action-buttons">
                 <button 
                   className="icon-button"
-                  onClick={() => navigate(`/patients/${patient.id}/visits`)}
+                  onClick={() => navigate(`/patients/${patient.id}/visits`, { state: { previousSearch: '?' + searchParams.toString() } })}
                   title="Xem lần khám"
                   style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
                 >

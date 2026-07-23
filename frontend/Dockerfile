@@ -1,5 +1,5 @@
-# Use official Node.js LTS image as build stage
-FROM node:18-alpine AS build
+# Use official Node.js LTS image
+FROM node:18-alpine
 
 # Set working directory
 WORKDIR /app
@@ -14,15 +14,8 @@ COPY . .
 # Build the frontend
 RUN npm run build
 
-# Use nginx for serving static files
-FROM nginx:alpine
+# Expose port 4004
+EXPOSE 4004
 
-# Copy built assets from build stage
-COPY --from=build /app/dist /usr/share/nginx/html
-
-# Copy custom nginx config if needed
-# COPY nginx.conf /etc/nginx/nginx.conf
-
-EXPOSE 80
-
-CMD ["nginx", "-g", "daemon off;"]
+# Use vite preview to serve built files on port 4004
+CMD ["npm", "run", "preview", "--", "--host", "0.0.0.0", "--port", "4004"]

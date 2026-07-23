@@ -8,7 +8,21 @@ const api = axios.create({
   withCredentials: true,
 });
 
-// Interceptor: tự động gọi refresh khi access token hết hạn
+// Request interceptor: Attach Authorization header
+api.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('dental_auth_token');
+    if (token) {
+      config.headers['Authorization'] = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
+
+// Response interceptor: tự động gọi refresh khi access token hết hạn
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
@@ -41,6 +55,7 @@ export const getProfile = () => api.get('/auth/profile');
 
 // Patients
 export const getPatients = (params = '') => api.get(`/patients${params}`);
+export const getAllPatients = () => api.get('/patients');
 export const getPatientById = (id) => api.get(`/patients/${id}`);
 export const searchPatients = (query) => api.get(`/patients/search?q=${query}`);
 export const createPatient = (data) => api.post('/patients', data);
@@ -63,11 +78,13 @@ export const updateImageValidation = (id, status) => api.put(`/images/${id}/vali
 export const deleteImage = (id) => api.delete(`/images/${id}`);
 
 // Bulk Upload
-export const bulkUploadImages = (formData) => {
+export const bulkUploadImages = (formData, onUploadProgress) => {
   return api.post('/bulk-upload', formData, {
     headers: {
       'Content-Type': 'multipart/form-data',
     },
+    timeout: 600000, // 10 minutes for large uploads
+    onUploadProgress: onUploadProgress,
   });
 };
 export const getBulkUploadHistory = () => api.get('/bulk-upload/history');

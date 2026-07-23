@@ -1,13 +1,16 @@
 import { useState, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { bulkUploadImages, getPatients, createPatient } from '../api'
 
 function BulkUpload() {
+  const navigate = useNavigate()
   const [files, setFiles] = useState([])
   const [parsedData, setParsedData] = useState([])
   const [isDragging, setIsDragging] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [uploadResult, setUploadResult] = useState(null)
+  const [uploadProgress, setUploadProgress] = useState(0)
   const fileInputRef = useRef(null)
   
   // Annotation file state
@@ -20,6 +23,8 @@ function BulkUpload() {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState([])
   const [expandedGroups, setExpandedGroups] = useState({}) // Track which groups are expanded
+  const [showValidationModal, setShowValidationModal] = useState(false)
+  const [validationSummary, setValidationSummary] = useState(null)
   const [newPatientForm, setNewPatientForm] = useState({
     name: '',
     phone: '',
@@ -35,7 +40,7 @@ function BulkUpload() {
     })
   }
 
-  // Parse filename: Patient_0061_28-10-2025_Bottom-left_JPG.rf.2a1880e537881d1577af1f9ba997076f
+  // Parse filename: Patient_0127_26-11-2025_Bottom-left_JPG.rf.c26f53735acf4f0b26dd6ed747ed87f7.jpg
   const parseFilename = (filename) => {
     // Match pattern: Patient_XXXX_DD-MM-YYYY_Position_JPG.rf.hash or Patient_XXXX_DD-MM-YYYY_Position.JPG
     const regex = /Patient_(\d+)_(\d{2})-(\d{2})-(\d{4})_(.+?)(?:_(?:JPG|PNG|jpg|png))?(?:\.rf\.[a-f0-9]+|\.(jpg|jpeg|png|JPG|JPEG|PNG))$/i
@@ -46,13 +51,49 @@ function BulkUpload() {
     }
     
     const [, patientId, day, month, year, position] = match
+    
+    // Normalize position using comprehensive mapping
+    const normalizedPosition = normalizePosition(position)
+    
+    console.log(`📸 Parsed ${filename}: position="${position}" -> normalized="${normalizedPosition}"`)
+    
     return {
       patientId: patientId.padStart(4, '0'),
       visitDate: `${year}-${month}-${day}`,
-      position: position.toLowerCase().replace(/-/g, '_'),
+      position: normalizedPosition,
       filename,
       ext: 'jpg' // Default to jpg since format is complex
     }
+  }
+
+  // Normalize position name with all variations
+  const normalizePosition = (positionName) => {
+    if (!positionName) return null
+    
+    const normalized = positionName
+      .toLowerCase()
+      .replace(/[-_\s]/g, '')
+    
+    const positionMap = {
+      'upper_right': ['upperright', 'topright', 'trenphai'],
+      'upper_center': ['uppercenter', 'uppermiddle', 'topcenter', 'topmiddle', 'trengiua'],
+      'upper_left': ['upperleft', 'topleft', 'trentrai'],
+      'middle_right': ['middleright', 'centralright', 'centerright', 'giuaphai'],
+      'middle_center': ['middlecenter', 'middlemiddle', 'centralcenter', 'centralmiddle', 'center', 'giua'],
+      'middle_left': ['middleleft', 'centralleft', 'centerleft', 'giuatrai'],
+      'lower_right': ['lowerright', 'bottomright', 'duoiphai'],
+      'lower_center': ['lowercenter', 'lowermiddle', 'bottomcenter', 'bottommiddle', 'duoigiua'],
+      'lower_left': ['lowerleft', 'bottomleft', 'duoitrai']
+    }
+    
+    for (const [standardType, variants] of Object.entries(positionMap)) {
+      if (variants.some(v => normalized === v || normalized.includes(v) || v.includes(normalized))) {
+        return standardType
+      }
+    }
+    
+    console.warn(`⚠️ Unknown position: "${positionName}"`)
+    return null
   }
 
   const processAnnotationFile = async (file, groupedData) => {
@@ -137,7 +178,15 @@ function BulkUpload() {
         message += `  - Thiếu ${report.missingCount}: ${report.missingPositions.join(', ')}\n\n`
       })
       
-      toast.warning(message, { duration: 10000 })
+      toast(message, { 
+        duration: 10000,
+        icon: '⚠️',
+        style: {
+          background: '#fff3cd',
+          color: '#856404',
+          border: '1px solid #ffc107'
+        }
+      })
     } else {
       toast.success('✓ Tất cả bệnh nhân đều có đủ 9 ảnh!');
     }
@@ -162,21 +211,28 @@ function BulkUpload() {
       // Try to parse as image file
       const info = parseFilename(file.name)
       if (info) {
-        imageFiles.push(file)
-        parsed.push({
-          file,
-          ...info
-        })
+        // Check if position was successfully normalized
+        if (!info.position) {
+          errors.push(`${file.name} (vị trí không hợp lệ)`)
+        } else {
+          imageFiles.push(file)
+          parsed.push({
+            file,
+            ...info
+          })
+        }
       } else {
-        // Might be image but can't parse filename
+        // Might be image but can't parse filename format
         if (file.type.startsWith('image/')) {
-          errors.push(file.name)
+          errors.push(`${file.name} (sai định dạng tên file)`)
         }
       }
     }
 
     if (errors.length > 0) {
-      toast.error(`⚠️ Không thể parse ${errors.length} file:\n${errors.slice(0, 5).join('\n')}${errors.length > 5 ? '\n...' : ''}`);
+      const errorList = errors.slice(0, 5).join('\n')
+      const moreText = errors.length > 5 ? `\n... và ${errors.length - 5} file khác` : ''
+      toast.error(`⚠️ Không thể parse ${errors.length} file:\n${errorList}${moreText}`, { duration: 8000 });
     }
 
     setFiles(imageFiles)
@@ -203,11 +259,82 @@ function BulkUpload() {
       toast.success(`✓ Tìm thấy file annotation: ${foundAnnotationFile.name}`);
       await processAnnotationFile(foundAnnotationFile, groupedArray)
     } else if (imageFiles.length > 0) {
-      toast.warning('⚠️ Không tìm thấy file annotation (.json) trong folder');
+      toast('⚠️ Không tìm thấy file annotation (.json) trong folder', {
+        icon: '⚠️',
+        style: {
+          background: '#fff3cd',
+          color: '#856404',
+          border: '1px solid #ffc107'
+        }
+      });
     }
     
     // Reset patient mappings when new files are loaded
     setPatientMappings({})
+    
+    // Auto-assign patients based on patient ID
+    if (groupedArray.length > 0) {
+      await autoAssignPatients(groupedArray)
+    }
+  }
+
+  const autoAssignPatients = async (groupedData) => {
+    const newMappings = {}
+    
+    for (const group of groupedData) {
+      const groupKey = `${group.patientId}_${group.visitDate}`
+      
+      try {
+        // Search for patient by ID in notes field
+        const response = await getPatients(`?search=Patient ID: ${group.patientId}&limit=50`)
+        const matchedPatients = response.data.data || []
+        
+        // Filter to exact matches in notes field
+        const exactMatches = matchedPatients.filter(p => 
+          p.notes && p.notes.includes(`Patient ID: ${group.patientId}`)
+        )
+        
+        if (exactMatches.length === 1) {
+          // Single match found - auto-assign
+          newMappings[groupKey] = {
+            type: 'existing',
+            patient: exactMatches[0],
+            patientId: group.patientId,
+            visitDate: group.visitDate
+          }
+        } else if (exactMatches.length === 0) {
+          // No match - suggest new patient creation
+          newMappings[groupKey] = {
+            type: 'new',
+            patient: {
+              name: `Bệnh Nhân #${group.patientId}`,
+              phone: '',
+              dob: '',
+              gender: 'unknown',
+              notes: `Patient ID: ${group.patientId}`
+            },
+            patientId: group.patientId,
+            visitDate: group.visitDate
+          }
+        }
+        // If multiple matches, leave unassigned for manual selection
+      } catch (error) {
+        console.error(`Error auto-assigning patient ${group.patientId}:`, error)
+      }
+    }
+    
+    if (Object.keys(newMappings).length > 0) {
+      setPatientMappings(newMappings)
+      const autoAssignedCount = Object.values(newMappings).filter(m => m.type === 'existing').length
+      const autoCreateCount = Object.values(newMappings).filter(m => m.type === 'new').length
+      
+      if (autoAssignedCount > 0 || autoCreateCount > 0) {
+        toast.success(
+          `✓ Tự động gán: ${autoAssignedCount} bệnh nhân có sẵn, ${autoCreateCount} bệnh nhân mới`,
+          { duration: 5000 }
+        )
+      }
+    }
   }
 
   const handleSearchPatient = async (query) => {
@@ -329,6 +456,48 @@ function BulkUpload() {
     fileInputRef.current?.click()
   }
 
+  const generateValidationSummary = () => {
+    const expectedPositions = [
+      'upper_right', 'upper_center', 'upper_left',
+      'middle_right', 'middle_center', 'middle_left',
+      'lower_right', 'lower_center', 'lower_left'
+    ]
+
+    const positionLabels = {
+      'upper_right': 'Trên phải',
+      'upper_center': 'Trên giữa',
+      'upper_left': 'Trên trái',
+      'middle_right': 'Giữa phải',
+      'middle_center': 'Giữa',
+      'middle_left': 'Giữa trái',
+      'lower_right': 'Dưới phải',
+      'lower_center': 'Dưới giữa',
+      'lower_left': 'Dưới trái'
+    }
+
+    const missingReport = []
+
+    parsedData.forEach(group => {
+      const uploadedPositions = group.images.map(img => img.position)
+      console.log(`🔍 Patient ${group.patientId}: Uploaded positions:`, uploadedPositions)
+      const missingPositions = expectedPositions.filter(pos => !uploadedPositions.includes(pos))
+      
+      if (missingPositions.length > 0) {
+        const missingLabels = missingPositions.map(pos => positionLabels[pos] || pos)
+        console.log(`⚠️ Patient ${group.patientId}: Missing ${missingPositions.length} positions:`, missingPositions)
+        missingReport.push({
+          patientId: group.patientId,
+          visitDate: group.visitDate,
+          totalImages: group.images.length,
+          missingCount: missingPositions.length,
+          missingPositions: missingLabels
+        })
+      }
+    })
+
+    return missingReport
+  }
+
   const handleUpload = async () => {
     if (parsedData.length === 0) {
       toast.error('Không có file nào để upload');
@@ -348,30 +517,35 @@ function BulkUpload() {
     })
 
     if (unmappedGroups.length > 0) {
-      alert(`Vui lòng chọn/tạo bệnh nhân cho ${unmappedGroups.length} nhóm chưa được gán!`)
+      toast.error(`Vui lòng chọn/tạo bệnh nhân cho ${unmappedGroups.length} nhóm chưa được gán!`)
       return
     }
 
-    // Confirm before uploading
+    // Generate validation summary for missing images
+    const missingReport = generateValidationSummary()
     const totalImages = parsedData.reduce((sum, group) => sum + group.images.length, 0)
     const newPatientsCount = Object.values(patientMappings).filter(m => m.type === 'new').length
     const existingPatientsCount = Object.values(patientMappings).filter(m => m.type === 'existing').length
     
-    const confirmed = window.confirm(
-      `Bạn sắp:\n` +
-      `- Tạo ${newPatientsCount} bệnh nhân mới\n` +
-      `- Gán ${existingPatientsCount} nhóm cho bệnh nhân có sẵn\n` +
-      `- Tạo ${parsedData.length} lần khám\n` +
-      `- Upload ${totalImages} ảnh\n` +
-      `- Với ${annotationPreview?.totalAnnotations || 0} annotations\n\n` +
-      `Xác nhận?`
-    )
+    // Store validation summary and show modal
+    setValidationSummary({
+      totalImages,
+      newPatientsCount,
+      existingPatientsCount,
+      visitsCount: parsedData.length,
+      annotationsCount: annotationPreview?.totalAnnotations || 0,
+      missingReport
+    })
+    setShowValidationModal(true)
+  }
 
-    if (!confirmed) return
+  const handleConfirmUpload = async () => {
+    setShowValidationModal(false)
 
     try {
       setUploading(true)
       setUploadResult(null)
+      setUploadProgress(0)
 
       const formData = new FormData()
       
@@ -396,32 +570,44 @@ function BulkUpload() {
 
       // Add metadata
       formData.append('metadata', JSON.stringify(enrichedMetadata))
-setPatientMappings({})
-    setEditingGroup(null)
-    setSearchQuery('')
-    setSearchResults([])
+
+      // Calculate FormData size (approximate)
+      const totalSize = files.reduce((sum, file) => sum + file.size, 0) + annotationFile.size
+      console.log(`📦 Uploading ${files.length} images (${(totalSize / 1024 / 1024).toFixed(2)} MB)`)
+      
+      toast.loading(`📤 Đang upload ${files.length} ảnh (${(totalSize / 1024 / 1024).toFixed(2)} MB)...`, { id: 'bulk-upload' })
     
-      const response = await bulkUploadImages(formData)
+      const response = await bulkUploadImages(formData, (progressEvent) => {
+        const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total)
+        setUploadProgress(progress)
+        console.log(`Upload progress: ${progress}%`)
+      })
       
       const resultData = response.data.data
       
-      // Build success message with annotation info
-      let successMsg = `✓ Upload thành công!\n\n`
-      successMsg += `📊 Thống kê:\n`
-      successMsg += `- Bệnh nhân mới: ${resultData.patientsCreated}\n`
-      successMsg += `- Lần khám: ${resultData.visitsCreated}\n`
-      successMsg += `- Ảnh: ${resultData.imagesCreated}\n`
-      successMsg += `- Annotations: ${resultData.annotationsCreated || 0}\n`
+      // Dismiss loading toast and show success
+      toast.dismiss('bulk-upload')
+      toast.success(
+        `✓ Upload thành công! \n` +
+        `Bệnh nhân: ${resultData.patientsCreated} mới, ` +
+        `Lần khám: ${resultData.visitsCreated}, ` +
+        `Ảnh: ${resultData.imagesCreated}, ` +
+        `Annotations: ${resultData.annotationsCreated || 0}`,
+        { duration: 5000 }
+      )
       
+      // Show warning for images without annotations
       if (resultData.imagesWithoutAnnotations && resultData.imagesWithoutAnnotations.length > 0) {
-        successMsg += `\n⚠️ Cảnh báo: ${resultData.imagesWithoutAnnotations.length} ảnh không có annotation:\n`
-        successMsg += resultData.imagesWithoutAnnotations.slice(0, 3).join('\n')
-        if (resultData.imagesWithoutAnnotations.length > 3) {
-          successMsg += `\n... và ${resultData.imagesWithoutAnnotations.length - 3} ảnh khác`
-        }
+        toast(`⚠️ ${resultData.imagesWithoutAnnotations.length} ảnh không có annotation`, {
+          duration: 3000,
+          icon: '⚠️',
+          style: {
+            background: '#fff3cd',
+            color: '#856404',
+            border: '1px solid #ffc107'
+          }
+        })
       }
-      
-      alert(successMsg)
       
       setUploadResult({
         success: true,
@@ -435,13 +621,39 @@ setPatientMappings({})
       setAnnotationFile(null)
       setAnnotationPreview(null)
       
+      // Redirect to patients page after short delay
+      setTimeout(() => {
+        navigate('/patients')
+      }, 2000)
+      setEditingGroup(null)
+      setSearchQuery('')
+      setSearchResults([])
+      
     } catch (error) {
+      console.error('Upload error:', error)
+      
+      // Dismiss loading toast
+      toast.dismiss('bulk-upload')
+      
+      let errorMsg = error.message
+      
+      if (error.code === 'ECONNABORTED') {
+        errorMsg = 'Request timeout - file quá lớn hoặc mạng chậm'
+      } else if (error.response) {
+        errorMsg = error.response.data?.error || `Server error: ${error.response.status}`
+      } else if (error.request) {
+        errorMsg = 'Không nhận được phản hồi từ server - kiểm tra kết nối mạng'
+      }
+      
+      toast.error(`❌ Upload thất bại: ${errorMsg}`, { duration: 10000 })
+      
       setUploadResult({
         success: false,
-        error: error.response?.data?.error || error.message
+        error: errorMsg
       })
     } finally {
       setUploading(false)
+      setUploadProgress(0)
     }
   }
 
@@ -913,7 +1125,7 @@ setPatientMappings({})
                   cursor: (uploading || Object.keys(patientMappings).length < parsedData.length) ? 'not-allowed' : 'pointer'
                 }}
               >
-                {uploading ? '⏳ Đang xử lý...' : `🚀 Xác nhận và Upload ${parsedData.length} nhóm`}
+                {uploading ? `⏳ Đang xử lý... ${uploadProgress}%` : `🚀 Xác nhận và Upload ${parsedData.length} nhóm`}
               </button>
               <button
                 className="button-secondary button"
@@ -926,6 +1138,179 @@ setPatientMappings({})
                 }}
               >
                 ❌ Hủy
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Validation Modal */}
+      {showValidationModal && validationSummary && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          zIndex: 1000,
+          padding: '20px'
+        }}>
+          <div style={{
+            background: 'white',
+            borderRadius: '16px',
+            padding: '30px',
+            maxWidth: '600px',
+            width: '100%',
+            maxHeight: '80vh',
+            overflow: 'auto',
+            boxShadow: '0 10px 40px rgba(0,0,0,0.2)'
+          }}>
+            <h2 style={{ 
+              marginBottom: '20px', 
+              color: '#1F2937',
+              fontSize: '22px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px'
+            }}>
+              📊 Xác Nhận Upload
+            </h2>
+
+            {/* Summary Stats */}
+            <div style={{
+              background: '#f8f9fa',
+              borderRadius: '12px',
+              padding: '20px',
+              marginBottom: '20px'
+            }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                <div>
+                  <div style={{ fontSize: '13px', color: '#666', marginBottom: '5px' }}>Bệnh nhân mới</div>
+                  <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#4CAF50' }}>
+                    {validationSummary.newPatientsCount}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '13px', color: '#666', marginBottom: '5px' }}>Bệnh nhân có sẵn</div>
+                  <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#FFA726' }}>
+                    {validationSummary.existingPatientsCount}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '13px', color: '#666', marginBottom: '5px' }}>Lần khám</div>
+                  <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#1E88E5' }}>
+                    {validationSummary.visitsCount}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '13px', color: '#666', marginBottom: '5px' }}>Ảnh</div>
+                  <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#1E88E5' }}>
+                    {validationSummary.totalImages}
+                  </div>
+                </div>
+              </div>
+              <div style={{ marginTop: '15px', paddingTop: '15px', borderTop: '1px solid #ddd' }}>
+                <div style={{ fontSize: '13px', color: '#666', marginBottom: '5px' }}>Annotations</div>
+                <div style={{ fontSize: '20px', fontWeight: 'bold', color: '#9C27B0' }}>
+                  {validationSummary.annotationsCount}
+                </div>
+              </div>
+            </div>
+
+            {/* Missing Images Warning */}
+            {validationSummary.missingReport.length > 0 ? (
+              <div style={{
+                background: '#FFF3E0',
+                border: '2px solid #FFA726',
+                borderRadius: '12px',
+                padding: '20px',
+                marginBottom: '20px'
+              }}>
+                <h3 style={{ 
+                  color: '#E65100', 
+                  fontSize: '16px', 
+                  marginBottom: '15px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px'
+                }}>
+                  <span style={{ fontSize: '22px' }}>⚠️</span>
+                  Cảnh báo: {validationSummary.missingReport.length} bệnh nhân thiếu ảnh
+                </h3>
+                <div style={{ maxHeight: '200px', overflow: 'auto' }}>
+                  {validationSummary.missingReport.map((report, idx) => (
+                    <div key={idx} style={{
+                      background: 'white',
+                      padding: '12px',
+                      borderRadius: '8px',
+                      marginBottom: '10px',
+                      border: '1px solid #FFB74D'
+                    }}>
+                      <div style={{ fontWeight: 'bold', color: '#E65100', marginBottom: '5px' }}>
+                        Bệnh Nhân #{report.patientId}
+                      </div>
+                      <div style={{ fontSize: '13px', color: '#666', marginBottom: '5px' }}>
+                        📅 {new Date(report.visitDate).toLocaleDateString('vi-VN')}
+                      </div>
+                      <div style={{ fontSize: '13px', color: '#666', marginBottom: '5px' }}>
+                        ✅ Có: {report.totalImages}/9 ảnh
+                      </div>
+                      <div style={{ fontSize: '13px', color: '#E65100' }}>
+                        ❌ Thiếu {report.missingCount} ảnh: {report.missingPositions.join(', ')}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div style={{
+                background: '#E8F5E9',
+                border: '2px solid #4CAF50',
+                borderRadius: '12px',
+                padding: '20px',
+                marginBottom: '20px',
+                textAlign: 'center'
+              }}>
+                <div style={{ fontSize: '40px', marginBottom: '10px' }}>✅</div>
+                <div style={{ color: '#2E7D32', fontSize: '16px', fontWeight: '600' }}>
+                  Hoàn hảo! Tất cả bệnh nhân đều có đủ 9 ảnh
+                </div>
+              </div>
+            )}
+
+            {/* Action Buttons */}
+            <div style={{ display: 'flex', gap: '12px', marginTop: '25px' }}>
+              <button
+                className="button"
+                onClick={handleConfirmUpload}
+                disabled={uploading}
+                style={{
+                  flex: 1,
+                  padding: '14px',
+                  fontSize: '15px',
+                  fontWeight: '600',
+                  background: '#4CAF50',
+                  opacity: uploading ? 0.5 : 1,
+                  cursor: uploading ? 'not-allowed' : 'pointer'
+                }}
+              >
+                {uploading ? `⏳ Đang xử lý... ${uploadProgress}%` : '✓ Xác Nhận Upload'}
+              </button>
+              <button
+                className="button-secondary button"
+                onClick={() => setShowValidationModal(false)}
+                disabled={uploading}
+                style={{
+                  padding: '14px 24px',
+                  fontSize: '15px',
+                  fontWeight: '600'
+                }}
+              >
+                Hủy
               </button>
             </div>
           </div>

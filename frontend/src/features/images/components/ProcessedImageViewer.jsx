@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import Button from '../../../components/ui/Button';
 import LoadingSpinner from '../../../components/ui/LoadingSpinner';
-import { FiUpload, FiX, FiZoomIn, FiChevronLeft, FiChevronRight } from 'react-icons/fi';
+import { FiUpload, FiX, FiZoomIn, FiChevronLeft, FiChevronRight, FiRotateCw, FiRotateCcw, FiCheck } from 'react-icons/fi';
 import AnnotationCanvas from '../../../components/AnnotationCanvas';
 import annotationService from '../../../services/annotationService';
 import { useAuth } from '../../auth/hooks/useAuth';
@@ -22,27 +22,12 @@ const ProcessedImageViewer = ({
   const [lightboxImage, setLightboxImage] = useState(null); // { url, label, position, stainedUrl, imageId, image }
   const [annotations, setAnnotations] = useState([]); // teeth array with subboxes
   const [annotationStats, setAnnotationStats] = useState(null);
+  const [rotation, setRotation] = useState(0); // Current rotation angle (0, 90, 180, 270)
+  const [isRotating, setIsRotating] = useState(false); // Saving rotation in progress
+  const [recentlyRotated, setRecentlyRotated] = useState(false); // Flag to suppress warning during rotation
   const { user: currentUser, isAuthenticated } = useAuth();
 
   const hasProcessed = processedImages.some(img => img.url_processed);
-  
-  // Auto-switch to processed view after processing completes
-  useEffect(() => {
-    console.log('ProcessedImageViewer useEffect:', {
-      hasProcessed,
-      processing,
-      viewMode,
-      processedImagesCount: processedImages.length,
-      rawImagesCount: rawImages.length
-    });
-    
-    if (hasProcessed && processing) {
-      console.log('Auto-switching to processed view');
-      setViewMode('processed');
-      setProcessing(false);
-      toast.success('Xử lý ảnh thành công!');
-    }
-  }, [hasProcessed, processing]);
   
   const displayImages = viewMode === 'processed' ? processedImages : rawImages;
 
@@ -51,6 +36,9 @@ const ProcessedImageViewer = ({
     const handleEsc = (e) => {
       if (e.key === 'Escape' && lightboxImage) {
         setLightboxImage(null);
+        setRotation(0); // Reset rotation when closing
+        setAnnotations([]); // Clear annotations
+        setAnnotationStats(null); // Clear stats
       }
     };
     window.addEventListener('keydown', handleEsc);
@@ -75,6 +63,124 @@ const ProcessedImageViewer = ({
     });
   };
 
+  // Rotation handlers
+  const handleRotateLeft = () => {
+    setRotation((prev) => (prev - 90 + 360) % 360);
+  };
+
+  const handleRotateRight = () => {
+    setRotation((prev) => (prev + 90) % 360);
+  };
+
+  const handleCancelRotation = () => {
+    setRotation(0);
+  };
+
+  const handleSaveRotation = async () => {
+    if (rotation === 0) {
+      toast.info('Không có thay đổi góc xoay');
+      return;
+    }
+
+    if (!lightboxImage?.imageId) {
+      toast.error('Không tìm thấy thông tin ảnh');
+      return;
+    }
+
+    setIsRotating(true);
+    setRecentlyRotated(true);
+    try {
+      // Create canvas to rotate image
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.src = lightboxImage.url;
+
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = reject;
+      });
+
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+
+      // Adjust canvas size for rotated image
+      if (rotation % 180 === 0) {
+        canvas.width = img.width;
+        canvas.height = img.height;
+      } else {
+        canvas.width = img.height;
+        canvas.height = img.width;
+      }
+
+      // Rotate and draw
+      ctx.translate(canvas.width / 2, canvas.height / 2);
+      ctx.rotate((rotation * Math.PI) / 180);
+      ctx.drawImage(img, -img.width / 2, -img.height / 2);
+
+      // Convert to blob
+      const blob = await new Promise((resolve) => {
+        canvas.toBlob(resolve, 'image/jpeg', 0.95);
+      });
+
+      // Upload rotated image
+      const formData = new FormData();
+      formData.append('image', blob, `rotated_${lightboxImage.imageId}.jpg`);
+      formData.append('imageId', lightboxImage.imageId);
+      formData.append('rotation', rotation);
+
+      const API_URL = import.meta.env.VITE_API_URL || 'http://100.93.48.110:3001';
+      const response = await fetch(`${API_URL}/api/images/${lightboxImage.imageId}/rotate`, {
+        method: 'POST',
+        body: formData,
+        credentials: 'include'
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to save rotated image');
+      }
+
+      const result = await response.json();
+
+      toast.success('Đã lưu ảnh xoay thành công!');
+      setRotation(0);
+      setAnnotations([]); // Clear old annotations
+      setAnnotationStats(null); // Clear old stats
+      setLightboxImage(null);
+
+      // Reload images to show rotated image immediately
+      if (onImagesUpdate) {
+        await onImagesUpdate();
+      }
+
+      // Show success message after images are reloaded
+      toast.success('Ảnh đã được cập nhật! Đang xử lý lại...');
+
+      // Automatically trigger reprocessing if needed
+      if (result.needsReprocessing && onProcessClick) {
+        setTimeout(async () => {
+          try {
+            await onProcessClick();
+            toast.success('Ảnh đã được xử lý lại với góc xoay mới!');
+            setRecentlyRotated(false);
+          } catch (err) {
+            console.error('Auto-reprocess error:', err);
+            toast.error('Không thể tự động xử lý lại. Vui lòng nhấn nút Process.');
+            setRecentlyRotated(false);
+          }
+        }, 1000);
+      } else {
+        // Fallback: clear flag after 3 seconds if no auto-reprocess
+        setTimeout(() => setRecentlyRotated(false), 3000);
+      }
+    } catch (err) {
+      console.error('Rotation error:', err);
+      toast.error('Không thể lưu ảnh xoay: ' + err.message);
+      setRecentlyRotated(false);
+    } finally {
+      setIsRotating(false);
+    }
+  };
+
   const handleProcessClick = async () => {
     setProcessing(true);
     setError(null);
@@ -83,10 +189,20 @@ const ProcessedImageViewer = ({
       console.log('Calling onProcessClick...');
       const result = await onProcessClick();
       console.log('onProcessClick result:', result);
+      
+      // Only set processing to false after receiving result
+      if (result && result.success) {
+        toast.success(result.message || 'Xử lý ảnh thành công!');
+        setViewMode('processed');
+      } else {
+        throw new Error(result?.message || 'Xử lý không thành công');
+      }
     } catch (err) {
       const errorMsg = err.message || 'Có lỗi xảy ra khi xử lý ảnh';
       setError(errorMsg);
       toast.error(errorMsg);
+    } finally {
+      // Always set processing to false when done
       setProcessing(false);
     }
   };
@@ -135,7 +251,7 @@ const ProcessedImageViewer = ({
         currentUser.id
       );
 
-      toast.success(newStatus === 1 ? 'Đánh dấu có mảng bám' : 'Đánh dấu không có mảng bám');
+      toast.success(newStatus === 1 ? '🔴 Có mảng bám' : '🟢 Không có mảng bám');
       
       // Reload annotations to reflect change
       if (lightboxImage?.imageId) {
@@ -152,15 +268,15 @@ const ProcessedImageViewer = ({
     if (!lightboxImage) return;
     
     const positions = [
-      { index: 1, type: 'top_right', label: 'Top Right', altTypes: [] },
-      { index: 2, type: 'top_center', label: 'Top Center', altTypes: ['top_middle'] },
-      { index: 3, type: 'top_left', label: 'Top Left', altTypes: [] },
-      { index: 4, type: 'central_right', label: 'Central Right', altTypes: [] },
-      { index: 5, type: 'central_middle', label: 'Central Middle', altTypes: [] },
-      { index: 6, type: 'central_left', label: 'Central Left', altTypes: [] },
-      { index: 7, type: 'bottom_right', label: 'Bottom Right', altTypes: [] },
-      { index: 8, type: 'bottom_center', label: 'Bottom Center', altTypes: ['bottom_middle'] },
-      { index: 9, type: 'bottom_left', label: 'Bottom Left', altTypes: [] }
+      { index: 1, type: 'upper_right', label: 'Upper Right', altTypes: ['top_right'] },
+      { index: 2, type: 'upper_middle', label: 'Upper Middle', altTypes: ['upper_center', 'top_middle'] },
+      { index: 3, type: 'upper_left', label: 'Upper Left', altTypes: ['top_left'] },
+      { index: 4, type: 'middle_right', label: 'Middle Right', altTypes: ['central_right'] },
+      { index: 5, type: 'middle_middle', label: 'Middle Middle', altTypes: ['central_middle'] },
+      { index: 6, type: 'middle_left', label: 'Middle Left', altTypes: ['central_left'] },
+      { index: 7, type: 'lower_right', label: 'Lower Right', altTypes: ['bottom_right'] },
+      { index: 8, type: 'lower_middle', label: 'Lower Middle', altTypes: ['lower_center', 'bottom_middle'] },
+      { index: 9, type: 'lower_left', label: 'Lower Left', altTypes: ['bottom_left'] }
     ];
 
     const currentIndex = positions.findIndex(p => p.index === lightboxImage.position.index);
@@ -185,13 +301,11 @@ const ProcessedImageViewer = ({
     });
 
     if (nextImage) {
-      const imageUrl = viewMode === 'processed' && nextImage.url_processed
-        ? nextImage.url_processed
-        : nextImage.url;
       const stainedImage = findStainedImage(nextPosition);
       
       setLightboxImage({
-        url: imageUrl,
+        url: nextImage.url,  // Always raw URL
+        urlProcessed: nextImage.url_processed,  // Processed URL if available
         label: nextPosition.label,
         position: nextPosition,
         stainedUrl: stainedImage?.url,
@@ -224,15 +338,15 @@ const ProcessedImageViewer = ({
 
   const renderGrid = () => {
     const positions = [
-      { index: 1, type: 'top_right', label: 'Top Right', altTypes: [] },
-      { index: 2, type: 'top_center', label: 'Top Center', altTypes: ['top_middle'] },
-      { index: 3, type: 'top_left', label: 'Top Left', altTypes: [] },
-      { index: 4, type: 'central_right', label: 'Central Right', altTypes: [] },
-      { index: 5, type: 'central_middle', label: 'Central Middle', altTypes: [] },
-      { index: 6, type: 'central_left', label: 'Central Left', altTypes: [] },
-      { index: 7, type: 'bottom_right', label: 'Bottom Right', altTypes: [] },
-      { index: 8, type: 'bottom_center', label: 'Bottom Center', altTypes: ['bottom_middle'] },
-      { index: 9, type: 'bottom_left', label: 'Bottom Left', altTypes: [] }
+      { index: 1, type: 'upper_right', label: 'Upper Right', altTypes: ['top_right'] },
+      { index: 2, type: 'upper_middle', label: 'Upper Middle', altTypes: ['upper_center', 'top_middle'] },
+      { index: 3, type: 'upper_left', label: 'Upper Left', altTypes: ['top_left'] },
+      { index: 4, type: 'middle_right', label: 'Middle Right', altTypes: ['central_right'] },
+      { index: 5, type: 'middle_middle', label: 'Middle Middle', altTypes: ['central_middle'] },
+      { index: 6, type: 'middle_left', label: 'Middle Left', altTypes: ['central_left'] },
+      { index: 7, type: 'lower_right', label: 'Lower Right', altTypes: ['bottom_right'] },
+      { index: 8, type: 'lower_middle', label: 'Lower Middle', altTypes: ['lower_center', 'bottom_middle'] },
+      { index: 9, type: 'lower_left', label: 'Lower Left', altTypes: ['bottom_left'] }
     ];
 
     return positions.map((pos) => {
@@ -296,6 +410,7 @@ const ProcessedImageViewer = ({
                 <img 
                   src={imageUrl} 
                   alt={pos.label}
+                  loading="lazy"
                   style={{ 
                     maxWidth: '100%',
                     maxHeight: '100%',
@@ -309,10 +424,12 @@ const ProcessedImageViewer = ({
                       imageId: image?.id,
                       imageUrl: imageUrl,
                       position: pos.label,
-                      hasStained: !!stainedImage
+                      hasStained: !!stainedImage,
+                      viewMode: viewMode
                     });
                     setLightboxImage({ 
-                      url: imageUrl, 
+                      url: image?.url,  // Always raw URL
+                      urlProcessed: image?.url_processed,  // Processed URL if available
                       label: pos.label,
                       position: pos,
                       stainedUrl: stainedImage?.url,
@@ -424,7 +541,12 @@ const ProcessedImageViewer = ({
             padding: '20px',
             cursor: 'pointer'
           }}
-          onClick={() => setLightboxImage(null)}
+          onClick={() => {
+            setLightboxImage(null);
+            setRotation(0);
+            setAnnotations([]);
+            setAnnotationStats(null);
+          }}
         >
           {/* Nút đóng */}
           <button
@@ -450,6 +572,9 @@ const ProcessedImageViewer = ({
             onClick={(e) => {
               e.stopPropagation();
               setLightboxImage(null);
+              setRotation(0);
+              setAnnotations([]); // Clear annotations
+              setAnnotationStats(null); // Clear stats
             }}
             onMouseEnter={(e) => {
               e.target.style.background = 'rgba(255, 255, 255, 0.3)';
@@ -460,6 +585,177 @@ const ProcessedImageViewer = ({
           >
             <FiX size={24} />
           </button>
+
+          {/* Rotation Controls */}
+          <div style={{
+            position: 'absolute',
+            bottom: '20px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            display: 'flex',
+            gap: '12px',
+            alignItems: 'center',
+            background: 'rgba(0, 0, 0, 0.8)',
+            backdropFilter: 'blur(10px)',
+            padding: '12px 16px',
+            borderRadius: '16px',
+            zIndex: 10000
+          }}>
+            {/* Rotate Left */}
+            <button
+              style={{
+                background: 'rgba(255, 255, 255, 0.2)',
+                border: 'none',
+                color: 'white',
+                width: '40px',
+                height: '40px',
+                borderRadius: '8px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                transition: 'all 0.2s'
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleRotateLeft();
+              }}
+              onMouseEnter={(e) => {
+                e.target.style.background = 'rgba(255, 255, 255, 0.3)';
+                e.target.style.transform = 'scale(1.1)';
+              }}
+              onMouseLeave={(e) => {
+                e.target.style.background = 'rgba(255, 255, 255, 0.2)';
+                e.target.style.transform = 'scale(1)';
+              }}
+              title="Xoay trái 90°"
+            >
+              <FiRotateCcw size={20} />
+            </button>
+
+            {/* Rotation Display */}
+            <div style={{
+              color: 'white',
+              fontSize: '14px',
+              fontWeight: '600',
+              minWidth: '50px',
+              textAlign: 'center'
+            }}>
+              {rotation}°
+            </div>
+
+            {/* Rotate Right */}
+            <button
+              style={{
+                background: 'rgba(255, 255, 255, 0.2)',
+                border: 'none',
+                color: 'white',
+                width: '40px',
+                height: '40px',
+                borderRadius: '8px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                transition: 'all 0.2s'
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleRotateRight();
+              }}
+              onMouseEnter={(e) => {
+                e.target.style.background = 'rgba(255, 255, 255, 0.3)';
+                e.target.style.transform = 'scale(1.1)';
+              }}
+              onMouseLeave={(e) => {
+                e.target.style.background = 'rgba(255, 255, 255, 0.2)';
+                e.target.style.transform = 'scale(1)';
+              }}
+              title="Xoay phải 90°"
+            >
+              <FiRotateCw size={20} />
+            </button>
+
+            {/* Divider */}
+            {rotation !== 0 && (
+              <>
+                <div style={{
+                  width: '1px',
+                  height: '40px',
+                  background: 'rgba(255, 255, 255, 0.2)',
+                  margin: '0 4px'
+                }} />
+
+                {/* Cancel Button */}
+                <button
+                  style={{
+                    background: 'rgba(239, 68, 68, 0.3)',
+                    border: 'none',
+                    color: 'white',
+                    padding: '8px 16px',
+                    borderRadius: '8px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    cursor: 'pointer',
+                    fontSize: '13px',
+                    fontWeight: '500',
+                    transition: 'all 0.2s'
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleCancelRotation();
+                  }}
+                  onMouseEnter={(e) => {
+                    e.target.style.background = 'rgba(239, 68, 68, 0.5)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.target.style.background = 'rgba(239, 68, 68, 0.3)';
+                  }}
+                >
+                  <FiX size={16} />
+                  Hủy
+                </button>
+
+                {/* Save Button */}
+                <button
+                  style={{
+                    background: 'rgba(16, 185, 129, 0.3)',
+                    border: 'none',
+                    color: 'white',
+                    padding: '8px 16px',
+                    borderRadius: '8px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    cursor: isRotating ? 'wait' : 'pointer',
+                    fontSize: '13px',
+                    fontWeight: '500',
+                    transition: 'all 0.2s',
+                    opacity: isRotating ? 0.6 : 1
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (!isRotating) {
+                      handleSaveRotation();
+                    }
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!isRotating) {
+                      e.target.style.background = 'rgba(16, 185, 129, 0.5)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    e.target.style.background = 'rgba(16, 185, 129, 0.3)';
+                  }}
+                  disabled={isRotating}
+                >
+                  <FiCheck size={16} />
+                  {isRotating ? 'Đang lưu...' : 'Lưu'}
+                </button>
+              </>
+            )}
+          </div>
 
           {/* Label */}
           <div style={{
@@ -624,23 +920,39 @@ const ProcessedImageViewer = ({
               </div>
               {(() => {
                 const shouldShowCanvas = viewMode === 'processed' && annotations.length > 0;
+                // Choose URL based on viewMode
+                const displayUrl = viewMode === 'processed' && lightboxImage.urlProcessed
+                  ? lightboxImage.urlProcessed
+                  : lightboxImage.url;
                 
                 return shouldShowCanvas ? (
-                  <AnnotationCanvas
-                    imageUrl={lightboxImage.url}
-                    teeth={annotations}
-                    onSubboxClick={handleSubboxClick}
-                  />
+                  <div style={{
+                    transform: `rotate(${rotation}deg)`,
+                    transition: 'transform 0.3s ease',
+                    maxWidth: '100%',
+                    maxHeight: '100%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}>
+                    <AnnotationCanvas
+                      imageUrl={displayUrl}
+                      teeth={annotations}
+                      onSubboxClick={handleSubboxClick}
+                    />
+                  </div>
                 ) : (
                   <img 
-                    src={lightboxImage.url}
+                    src={displayUrl}
                     alt={lightboxImage.label}
                     style={{
                       maxWidth: '100%',
                       maxHeight: '100%',
                       objectFit: 'contain',
                       borderRadius: '8px',
-                      boxShadow: '0 20px 60px rgba(0, 0, 0, 0.5)'
+                      boxShadow: '0 20px 60px rgba(0, 0, 0, 0.5)',
+                      transform: `rotate(${rotation}deg)`,
+                      transition: 'transform 0.3s ease'
                     }}
                     onClick={(e) => e.stopPropagation()}
                   />
@@ -707,19 +1019,6 @@ const ProcessedImageViewer = ({
               )}
             </div>
           </div>
-
-          {/* Hint */}
-          <div style={{
-            position: 'absolute',
-            bottom: '20px',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            color: 'rgba(255, 255, 255, 0.6)',
-            fontSize: '12px',
-            textAlign: 'center'
-          }}>
-            Click bên ngoài hoặc nhấn ESC để đóng
-          </div>
         </div>
       )}
 
@@ -742,7 +1041,7 @@ const ProcessedImageViewer = ({
         </div>
         
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          {rawImages.length >= 9 && !hasProcessed && (
+          {rawImages.length > 0 && !hasProcessed && (
             <Button
               onClick={handleProcessClick}
               disabled={processing}
@@ -799,7 +1098,7 @@ const ProcessedImageViewer = ({
       )}
 
       {/* Warning when processed images are incomplete */}
-      {hasProcessed && processedImages.filter(img => img.url_processed).length < rawImages.length && !processing && (
+      {hasProcessed && processedImages.filter(img => img.url_processed).length < rawImages.length && !processing && !recentlyRotated && (
         <div style={{
           padding: '8px 12px',
           background: '#fff3cd',
@@ -871,20 +1170,7 @@ const ProcessedImageViewer = ({
         {renderGrid()}
       </div>
 
-      {!hasProcessed && rawImages.length > 0 && rawImages.length < 9 && (
-        <div style={{
-          textAlign: 'center',
-          padding: '12px',
-          background: '#fef3c7',
-          borderRadius: '4px',
-          margin: '8px',
-          border: '1px solid #fde68a'
-        }}>
-          <p style={{ margin: 0, color: '#92400e', fontSize: '11px', fontWeight: '500' }}>
-            💡 Upload đủ 9 ảnh RAW để bật chức năng xử lý ảnh
-          </p>
-        </div>
-      )}
+
     </div>
   );
 };

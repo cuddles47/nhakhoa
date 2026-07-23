@@ -194,7 +194,7 @@ function matchFilenameToAnnotations(uploadedFilename, imageMap) {
 
 /**
  * Convert COCO bbox sang YOLO format
- * @param {Array} cocoAnnotations - Array of { category_name, bbox: [x, y, w, h] }
+ * @param {Array} cocoAnnotations - Array of { category_id, category_name, bbox: [x, y, w, h] }
  * @param {number} imageWidth - Width của ảnh (pixels)
  * @param {number} imageHeight - Height của ảnh (pixels)
  * @returns {Array} - Array of { class_id, x_center, y_center, width, height, category_name }
@@ -210,7 +210,7 @@ function convertCOCOToYOLO(cocoAnnotations, imageWidth, imageHeight) {
     const height_norm = h / imageHeight;
     
     return {
-      class_id: getCategoryYOLOClass(ann.category_name),
+      class_id: getCategoryYOLOClass(ann.category_id),
       x_center,
       y_center,
       width: width_norm,
@@ -221,26 +221,20 @@ function convertCOCOToYOLO(cocoAnnotations, imageWidth, imageHeight) {
 }
 
 /**
- * Map COCO category name sang YOLO class ID
- * @param {string} categoryName - Tên category từ COCO (tooth number hoặc 'Brace')
- * @returns {number} - YOLO class ID
+ * COCO Category Mapping
+ * YOLO class = COCO category_id (giữ nguyên)
+ * Teeth: category_id 1-20 → YOLO class 1-20
+ * Brace: category_id 21 → YOLO class 21
  */
-function getCategoryYOLOClass(categoryName) {
-  // Map COCO category names to YOLO class IDs
-  // Tooth numbers: 11-14, 21-24, 31-34, 41-44
-  // Brace/bracket: class 13
-  const mapping = {
-    '11': 0, '12': 1, '13': 2, '14': 3,
-    '21': 4, '22': 5, '23': 6, '24': 7,
-    '31': 8, '32': 9, '33': 10, '34': 11,
-    '41': 12, '43': 14, '44': 15,
-    'Brace': 13,
-    'brace': 13,
-    'bracket': 13,
-    'Bracket': 13
-  };
-  
-  return mapping[categoryName] !== undefined ? mapping[categoryName] : 0;
+
+/**
+ * Map COCO category_id sang YOLO class ID
+ * @param {number} categoryId - Category ID từ COCO
+ * @returns {number} - YOLO class ID (giống category_id)
+ */
+function getCategoryYOLOClass(categoryId) {
+  // YOLO class = COCO category_id (giữ nguyên)
+  return categoryId || 0;
 }
 
 /**
@@ -312,6 +306,97 @@ function validateAnnotationCount(annotationCount) {
   return { valid: true, warning: null, level: 'ok' };
 }
 
+/**
+ * Convert bounding box from pixels to YOLO normalized format
+ * @param {Array} bbox - [x, y, width, height] in pixels
+ * @param {number} imageWidth - Image width in pixels
+ * @param {number} imageHeight - Image height in pixels
+ * @returns {Object} - { x_center, y_center, width, height } normalized [0-1]
+ */
+function convertBboxToYOLOFormat(bbox, imageWidth, imageHeight) {
+  const [x, y, w, h] = bbox;
+  
+  // Convert top-left corner to center
+  const x_center = (x + w / 2) / imageWidth;
+  const y_center = (y + h / 2) / imageHeight;
+  const width = w / imageWidth;
+  const height = h / imageHeight;
+  
+  // Clamp to [0, 1] range
+  return {
+    x_center: Math.max(0, Math.min(1, x_center)),
+    y_center: Math.max(0, Math.min(1, y_center)),
+    width: Math.max(0, Math.min(1, width)),
+    height: Math.max(0, Math.min(1, height))
+  };
+}
+
+/**
+ * Convert subboxes to YOLO format (6-field: class x y w h parent_tooth_class)
+ * @param {Array} subboxes - Array of subbox objects with bbox, plaque_status, parent_category_id
+ * @param {number} imageWidth - Image width in pixels
+ * @param {number} imageHeight - Image height in pixels
+ * @returns {Array} - Array of YOLO annotation objects
+ */
+function convertSubboxesToYOLO(subboxes, imageWidth, imageHeight) {
+  return subboxes.map(subbox => {
+    const yoloCoords = convertBboxToYOLOFormat(subbox.bbox, imageWidth, imageHeight);
+    
+    // Get parent tooth YOLO class from category_id
+    const parentToothClass = getCategoryYOLOClass(subbox.parent_category_id);
+    
+    // Convert plaque_status to class_id (0 = no_plaque, 1 = has_plaque)
+    let class_id = 0;
+    if (subbox.plaque_status === 'plaque' || subbox.plaque_status === 1 || subbox.plaque_status === true) {
+      class_id = 1;
+    } else if (subbox.plaque_status === 'no_plaque' || subbox.plaque_status === 0 || subbox.plaque_status === false) {
+      class_id = 0;
+    }
+    
+    return {
+      class_id: class_id,
+      x_center: yoloCoords.x_center,
+      y_center: yoloCoords.y_center,
+      width: yoloCoords.width,
+      height: yoloCoords.height,
+      parent_tooth_class: parentToothClass
+    };
+  });
+}
+
+/**
+ * Format YOLO subbox annotations to text string (6-field format)
+ * @param {Array} yoloSubboxes - Array of { class_id, x_center, y_center, width, height, parent_tooth_class }
+ * @returns {string} - YOLO format text (one annotation per line)
+ */
+function formatYOLOSubboxText(yoloSubboxes) {
+  return yoloSubboxes
+    .map(ann => 
+      `${ann.class_id} ${ann.x_center.toFixed(6)} ${ann.y_center.toFixed(6)} ${ann.width.toFixed(6)} ${ann.height.toFixed(6)} ${ann.parent_tooth_class}`
+    )
+    .join('\n');
+}
+
+/**
+ * Validate YOLO coordinates are within bounds
+ * @param {Object} yoloCoords - { x_center, y_center, width, height }
+ * @returns {boolean} - true if valid, false otherwise
+ */
+function validateYOLOCoordinates(yoloCoords) {
+  const { x_center, y_center, width, height } = yoloCoords;
+  
+  return (
+    x_center >= 0 && x_center <= 1 &&
+    y_center >= 0 && y_center <= 1 &&
+    width >= 0 && width <= 1 &&
+    height >= 0 && height <= 1 &&
+    (x_center - width / 2) >= 0 &&
+    (x_center + width / 2) <= 1 &&
+    (y_center - height / 2) >= 0 &&
+    (y_center + height / 2) <= 1
+  );
+}
+
 module.exports = {
   splitCOCOByPatient,
   parseCOCOFile,
@@ -320,5 +405,9 @@ module.exports = {
   getCategoryYOLOClass,
   storeBatchAnnotations,
   formatYOLOText,
-  validateAnnotationCount
+  validateAnnotationCount,
+  convertBboxToYOLOFormat,
+  convertSubboxesToYOLO,
+  formatYOLOSubboxText,
+  validateYOLOCoordinates
 };

@@ -8,8 +8,10 @@ const imageController = require('../controllers/ImageController');
 const bulkUploadController = require('../controllers/BulkUploadController');
 const imageProcessingController = require('../controllers/ImageProcessingController');
 const annotationController = require('../controllers/AnnotationController');
+const exportController = require('../controllers/ExportController');
 const indexController = require('../controllers/index');
 const validate = require('../middleware/validate');
+const { authenticate, optionalAuth } = require('../middleware/auth');
 const patientSchemas = require('../validators/patientValidator');
 const visitSchemas = require('../validators/visitValidator');
 const imageSchemas = require('../validators/imageValidator');
@@ -19,8 +21,9 @@ const multer = require('multer');
 const upload = multer({ 
     storage: multer.memoryStorage(),
     limits: {
-        fileSize: 10 * 1024 * 1024, // 10MB per file
-        files: 99 // Max 99 files
+        fileSize: 100 * 1024 * 1024, // 100MB per file (for high-quality images)
+        files: 5000, // Max 5000 files for large bulk uploads
+        fieldSize: 25 * 1024 * 1024 // 25MB for text fields (e.g., large JSON metadata)
     }
 });
 
@@ -64,13 +67,11 @@ router.get('/api/visits/:visitId/images', imageController.getImagesByVisitId);
 router.get('/api/visits/:visitId/images/:category', imageController.getImagesByCategory);
 router.post('/api/images', upload.single('image'), validate(imageSchemas.create), imageController.createImage);
 router.put('/api/images/:id/validation', validate(imageSchemas.updateValidation), imageController.updateValidationStatus);
+router.post('/api/images/:id/rotate', upload.single('image'), imageController.rotateImage);
 router.delete('/api/images/:id', imageController.deleteImage);
 
 // Bulk upload routes
-router.post('/api/bulk-upload', upload.fields([
-    { name: 'images', maxCount: 100 },
-    { name: 'annotationFile', maxCount: 1 }
-]), bulkUploadController.bulkUpload);
+router.post('/api/bulk-upload', upload.any(), bulkUploadController.bulkUpload);
 router.get('/api/bulk-upload/history', bulkUploadController.getUploadHistory);
 
 // Stained bulk upload routes
@@ -79,35 +80,54 @@ router.get('/api/visits/:visitId/stained-upload-status', bulkUploadController.ge
 router.get('/api/patients/:patientId/available-visits', bulkUploadController.getAvailableVisitsForStained);
 
 // Image processing routes
-router.post('/api/visits/:visitId/process-images', imageProcessingController.processRawImages);
-router.get('/api/visits/:visitId/processing-status', imageProcessingController.getProcessingStatus);
+router.post('/api/visits/:visitId/process-images', authenticate, imageProcessingController.processRawImages);
+router.get('/api/visits/:visitId/processing-status', authenticate, imageProcessingController.getProcessingStatus);
 
 // Annotation routes
 router.get('/api/images/:imageId/annotations', annotationController.getImageAnnotations);
-router.put('/api/annotations/:annotationId/plaque', annotationController.updatePlaqueStatus);
+router.put('/api/annotations/:annotationId/plaque', authenticate, annotationController.updatePlaqueStatus);
 router.post('/api/images/:imageId/annotations/batch', annotationController.batchUpdateAnnotations);
 router.get('/api/visits/:visitId/annotations/stats', annotationController.getVisitStats);
 
+// Export routes
+router.post('/api/export/dataset', authenticate, exportController.exportDataset);
+router.get('/api/exports/:exportId', authenticate, exportController.getExportStatus);
+router.get('/api/exports/:exportId/download', authenticate, exportController.downloadExport);
+router.delete('/api/exports/:exportId', authenticate, exportController.deleteExport);
+
 // Proxy route for MinIO images (to avoid CORS issues)
-router.get('/api/images/proxy/*', async (req, res) => {
+router.get('/api/images/proxy/*', optionalAuth, async (req, res) => {
   try {
-    const objectName = req.params[0]; // Everything after /api/images/proxy/
-    console.log('Proxying image request for:', objectName);
+    const objectName = req.params[0];
     
     const storageService = require('../services/storage');
-    const imageBuffer = await storageService.downloadFile(objectName);
+    const stat = await storageService.getFileStat(objectName);
     
-    // Set appropriate content type based on file extension
     const ext = objectName.split('.').pop().toLowerCase();
     const contentType = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : 
                        ext === 'png' ? 'image/png' : 'image/jpeg';
     
+    res.set('Access-Control-Allow-Origin', process.env.FRONTEND_URL || 'http://localhost:4004');
+    res.set('Access-Control-Allow-Credentials', 'true');
     res.set('Content-Type', contentType);
-    res.set('Cache-Control', 'public, max-age=3600');
-    res.send(imageBuffer);
+    res.set('Cache-Control', 'public, max-age=86400, immutable');
+    
+    if (stat && stat.etag) {
+      res.set('ETag', `"${stat.etag}"`);
+    }
+    
+    const ifNoneMatch = req.headers['if-none-match'];
+    if (ifNoneMatch && stat && ifNoneMatch === `"${stat.etag}"`) {
+      return res.status(304).end();
+    }
+    
+    const stream = await storageService.streamFile(objectName);
+    stream.pipe(res);
   } catch (error) {
     console.error('Error proxying image:', error);
-    res.status(404).json({ error: 'Image not found' });
+    if (!res.headersSent) {
+      res.status(404).json({ error: 'Image not found' });
+    }
   }
 });
 

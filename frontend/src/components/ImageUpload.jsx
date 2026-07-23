@@ -41,9 +41,28 @@ function ImageUpload() {
       const API_URL = import.meta.env.VITE_API_URL;
       const convertToProxyUrl = (url) => {
         if (!url) return url;
-        if (url.startsWith('http')) return url;
-        const path = url.replace(/^\/nhakhoa\//, '');
-        return `${API_URL}/api/images/proxy/${path}`;
+        
+        // Always use proxy for consistency
+        // Extract path after bucket name from any URL format
+        let path = url;
+        
+        // If it's a full URL (presigned or not), extract the path
+        if (url.startsWith('http')) {
+          const match = url.match(/\/nhakhoa\/(.+?)(\?|$)/);
+          if (match) {
+            path = match[1];
+          } else {
+            // Can't parse, return as is
+            console.warn('⚠️ Cannot parse URL:', url);
+            return url;
+          }
+        } else {
+          // Regular MinIO path format
+          path = url.replace(/^\/nhakhoa\//, '');
+        }
+        
+        const proxyUrl = `${API_URL}/api/images/proxy/${path}`;
+        return proxyUrl;
       };
       
       const allImagesWithProxy = allImages.map(img => ({
@@ -77,9 +96,25 @@ function ImageUpload() {
       const API_URL = import.meta.env.VITE_API_URL || 'http://192.168.1.17:3000';
       const convertToProxyUrl = (url) => {
         if (!url) return url;
-        if (url.startsWith('http')) return url; // Already full URL
-        // Convert /nhakhoa/visits/... to /api/images/proxy/visits/...
-        const path = url.replace(/^\/nhakhoa\//, '');
+        
+        // Always use proxy for consistency
+        // Extract path after bucket name from any URL format
+        let path = url;
+        
+        // If it's a full URL (presigned or not), extract the path
+        if (url.startsWith('http')) {
+          const match = url.match(/\/nhakhoa\/(.+?)(\?|$)/);
+          if (match) {
+            path = match[1];
+          } else {
+            // Can't parse, return as is
+            return url;
+          }
+        } else {
+          // Regular MinIO path format
+          path = url.replace(/^\/nhakhoa\//, '');
+        }
+        
         return `${API_URL}/api/images/proxy/${path}`;
       };
       
@@ -109,15 +144,29 @@ function ImageUpload() {
       const result = await imageService.processImages(visitId);
       
       if (result.success) {
-        setProcessedImages(result.data);
-        // Reload all images to get updated URLs
-        await loadImages();
+        toast.success('Đã enqueue job xử lý ảnh');
+        
+        const { promise: pollPromise, stop } = imageService.pollProcessingStatus(
+          visitId,
+          (statusData) => {
+            console.log('Processing status:', statusData);
+          }
+        );
+        
+        const finalStatus = await pollPromise;
+        
+        if (finalStatus.status === 'completed') {
+          toast.success('Xử lý ảnh thành công!');
+          await loadImages();
+          return { success: true };
+        } else if (finalStatus.status === 'failed') {
+          throw new Error(finalStatus.errorMessage || 'Xử lý ảnh thất bại');
+        }
       }
       
       return result;
     } catch (err) {
-      // ...existing code...
-      throw new Error(err.response?.data?.error || 'Không thể xử lý ảnh');
+      throw new Error(err.response?.data?.error || err.message || 'Không thể xử lý ảnh');
     }
   }
 
@@ -165,17 +214,29 @@ function ImageUpload() {
   }
 
   const renderImageGrid = (category, imagesList) => {
+    console.log('📋 Rendering grid:', { 
+      category, 
+      imageCount: imagesList?.length,
+      sampleImage: imagesList?.[0] ? {
+        id: imagesList[0].id,
+        category: imagesList[0].image_category,
+        type: imagesList[0].image_type,
+        url: imagesList[0].url?.substring(0, 80)
+      } : 'No images'
+    });
+    
     // Define 3x3 grid with semantic position names for dental images
+    // Match the position names from bulk upload: upper/middle/lower + left/center/right
     const positions = [
-      { index: 1, type: 'top_right', label: 'Top Right' },
-      { index: 2, type: 'top_center', label: 'Top Center', altTypes: ['top_middle'] },
-      { index: 3, type: 'top_left', label: 'Top Left' },
-      { index: 4, type: 'central_right', label: 'Central Right' },
-      { index: 5, type: 'central_middle', label: 'Central Middle' },
-      { index: 6, type: 'central_left', label: 'Central Left' },
-      { index: 7, type: 'bottom_right', label: 'Bottom Right' },
-      { index: 8, type: 'bottom_center', label: 'Bottom Center', altTypes: ['bottom_middle'] },
-      { index: 9, type: 'bottom_left', label: 'Bottom Left' }
+      { index: 1, type: 'upper_right', label: 'Trên phải', altTypes: ['top_right'] },
+      { index: 2, type: 'upper_center', label: 'Trên giữa', altTypes: ['top_center', 'top_middle', 'upper_middle'] },
+      { index: 3, type: 'upper_left', label: 'Trên trái', altTypes: ['top_left'] },
+      { index: 4, type: 'middle_right', label: 'Giữa phải', altTypes: ['central_right'] },
+      { index: 5, type: 'middle_center', label: 'Giữa', altTypes: ['central_middle', 'middle_middle'] },
+      { index: 6, type: 'middle_left', label: 'Giữa trái', altTypes: ['central_left'] },
+      { index: 7, type: 'lower_right', label: 'Dưới phải', altTypes: ['bottom_right'] },
+      { index: 8, type: 'lower_center', label: 'Dưới giữa', altTypes: ['bottom_center', 'bottom_middle', 'lower_middle'] },
+      { index: 9, type: 'lower_left', label: 'Dưới trái', altTypes: ['bottom_left'] }
     ]
     
     return (
@@ -195,16 +256,41 @@ function ImageUpload() {
             const imgType = img.image_type?.toLowerCase() || ''
             const posType = pos.type.toLowerCase()
             
-            // Check main type
-            if (imgType.includes(posType)) return true
+            // Debug log for middle_center
+            if (pos.index === 5) {
+              console.log(`🔍 Matching pos 5 (${pos.type}):`, {
+                imgType,
+                posType,
+                image: img,
+                startsWithMatch: imgType.startsWith(posType),
+                exactMatch: imgType === posType
+              })
+            }
+            
+            // Check if image_type starts with or contains the position
+            // Handle formats like: "lower_left_jpg.rf.hash" or "lower_left"
+            if (imgType.startsWith(posType)) return true
+            if (imgType.includes('_' + posType + '_')) return true
+            if (imgType.includes(posType + '_')) return true
             
             // Check alternative types
             if (pos.altTypes) {
-              return pos.altTypes.some(alt => imgType.includes(alt.toLowerCase()))
+              return pos.altTypes.some(alt => {
+                const altLower = alt.toLowerCase()
+                return imgType.startsWith(altLower) || 
+                       imgType.includes('_' + altLower + '_') ||
+                       imgType.includes(altLower + '_')
+              })
             }
             
             return false
           })
+          
+          console.log('🔍 Position match:', { 
+            position: pos.type, 
+            found: !!image, 
+            imageType: image?.image_type 
+          });
           
           return (
             <div 
@@ -238,6 +324,7 @@ function ImageUpload() {
                     <img 
                       src={image.url} 
                       alt={pos.label}
+                      loading="lazy"
                       style={{ 
                         maxWidth: '100%',
                         maxHeight: '100%',

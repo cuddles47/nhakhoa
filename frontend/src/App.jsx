@@ -8,6 +8,7 @@ import VisitManager from './components/VisitManager'
 import ImageUpload from './components/ImageUpload'
 import BulkUpload from './components/BulkUpload'
 import StainedBulkUpload from './components/StainedBulkUpload'
+import DatasetExport from './components/DatasetExport'
 
 
 function App() {
@@ -39,6 +40,7 @@ function App() {
             <Route path="/visits/:visitId/images" element={<ImageUpload />} />
             <Route path="/bulk-upload" element={<BulkUpload />} />
             <Route path="/bulk-upload/stained" element={<StainedBulkUpload />} />
+            <Route path="/export" element={<DatasetExport />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </div>

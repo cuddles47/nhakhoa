@@ -20,13 +20,33 @@ class BulkUploadController {
             // Parse metadata
             const metadata = JSON.parse(req.body.metadata || '[]');
             
+            // When using upload.any(), req.files is an array
             // When using upload.fields(), req.files is an object with field names as keys
-            let imageFiles = req.files?.images || [];
-            const annotationFiles = req.files?.annotationFile || [];
-            let annotationFile = annotationFiles[0];
+            // Support both formats for flexibility
+            let imageFiles = [];
+            let annotationFile = null;
+            const archiveFiles = [];
+
+            if (Array.isArray(req.files)) {
+                // upload.any() format - req.files is an array
+                for (const file of req.files) {
+                    if (file.fieldname === 'images') {
+                        imageFiles.push(file);
+                    } else if (file.fieldname === 'annotationFile') {
+                        annotationFile = file;
+                    } else if (file.fieldname === 'archive') {
+                        archiveFiles.push(file);
+                    }
+                }
+            } else if (req.files) {
+                // upload.fields() format - req.files is an object
+                imageFiles = req.files.images || [];
+                const annotationFiles = req.files.annotationFile || [];
+                annotationFile = annotationFiles[0];
+                archiveFiles.push(...(req.files.archive || []));
+            }
 
             // If an archive (zip) was uploaded, extract it to disk and add files to `imageFiles` (use disk paths to avoid memory pressure)
-            const archiveFiles = req.files?.archive || [];
             const path = require('path');
             const fs = require('fs');
             const { extractZipToDir, listFilesRecursively, cleanupDir } = require('../utils/zipHandler');
@@ -271,13 +291,21 @@ class BulkUploadController {
                     console.log(`[${visit.id}] Matching ${uploadResult.originalName}: ${matchedImage ? 'FOUND (coco_id=' + matchedImage.coco_id + ')' : 'NOT FOUND'}`);
 
                     // Truncate long values to fit VARCHAR constraints
+                    // Map position to index (1-9)
+                    const positionIndexMap = {
+                        'upper_right': 1, 'upper_center': 2, 'upper_left': 3,
+                        'middle_right': 4, 'middle_center': 5, 'middle_left': 6,
+                        'lower_right': 7, 'lower_center': 8, 'lower_left': 9
+                    };
+                    const imageIndex = positionIndexMap[fileInfo.imageInfo.position] || null;
+                    
                     const imageData = {
                         visit_id: visit.id,
                         url: uploadResult.url, // VARCHAR(255) - Changed from url_minio to url
                         original_filename: uploadResult.originalName, // NEW: Store original filename
                         image_category: fileInfo.imageCategory, // VARCHAR(20)
                         image_type: fileInfo.imageInfo.position.substring(0, 50), // VARCHAR(50) - truncate
-                        image_index: null, // Could parse from position if needed
+                        image_index: imageIndex, // Set proper index based on position
                         validation_status: 'pending', // VARCHAR(20)
                         notes: `Bulk upload: ${uploadResult.originalName}`, // TEXT - no limit
                         width: matchedImage ? matchedImage.width : null, // NEW: Store image dimensions
@@ -329,15 +357,35 @@ class BulkUploadController {
             // Commit transaction
             await client.query('COMMIT');
 
+            // Build detailed patient summary
+            const patientSummary = createdPatients.map((patient, idx) => ({
+                id: patient.id,
+                name: patient.name,
+                patientId: metadata[idx]?.patientId,
+                type: metadata[idx]?.patientMapping?.type,
+                imagesCount: createdVisits[idx] ? 
+                    createdImages.filter(img => img.visit_id === createdVisits[idx].id).length : 0
+            }));
+
+            // Build success message
+            const summaryParts = [];
+            if (patientsCreated > 0) summaryParts.push(`${patientsCreated} bệnh nhân mới`);
+            if (visitsCreated > 0) summaryParts.push(`${visitsCreated} lần khám`);
+            if (imagesCreated > 0) summaryParts.push(`${imagesCreated} ảnh`);
+            if (annotationsCreated > 0) summaryParts.push(`${annotationsCreated} annotations`);
+            
+            const successMessage = `Upload thành công: ${summaryParts.join(', ')}`;
+
             res.status(201).json({
                 success: true,
-                message: 'Bulk upload completed successfully',
+                message: successMessage,
                 data: {
                     patientsCreated,
                     visitsCreated,
                     imagesCreated,
                     annotationsCreated,
                     imagesWithoutAnnotations: imagesWithoutAnnotations.length > 0 ? imagesWithoutAnnotations : undefined,
+                    patientSummary,
                     patients: createdPatients,
                     visits: createdVisits,
                     images: createdImages
@@ -348,9 +396,24 @@ class BulkUploadController {
             // Rollback transaction on error
             await client.query('ROLLBACK');
             console.error('Bulk upload error:', error);
+            
+            // Provide more detailed error message
+            let errorMessage = 'Upload thất bại';
+            if (error.message.includes('annotation')) {
+                errorMessage = `Lỗi xử lý annotations: ${error.message}`;
+            } else if (error.message.includes('patient')) {
+                errorMessage = `Lỗi tạo bệnh nhân: ${error.message}`;
+            } else if (error.message.includes('visit')) {
+                errorMessage = `Lỗi tạo lần khám: ${error.message}`;
+            } else if (error.message.includes('upload') || error.message.includes('storage')) {
+                errorMessage = `Lỗi upload ảnh: ${error.message}`;
+            } else {
+                errorMessage = error.message || 'Lỗi không xác định';
+            }
+            
             res.status(500).json({ 
                 success: false, 
-                error: error.message || 'Bulk upload failed'
+                error: errorMessage
             });
         } finally {
             // Clean up extracted archive files if any

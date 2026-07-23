@@ -166,6 +166,26 @@ class Visit {
         return result.rows[0];
     }
 
+    /**
+     * Mark visit as reprocessed
+     * @param {number} visitId - Visit ID
+     * @param {number} userId - User ID who triggered reprocessing
+     * @param {string} notes - Optional notes
+     */
+    static async markAsReprocessed(visitId, userId = null, notes = null) {
+        const query = `
+            UPDATE visits 
+            SET reprocessed_at = CURRENT_TIMESTAMP,
+                reprocessed_by = $2,
+                reprocess_notes = $3,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = $1
+            RETURNING *
+        `;
+        const result = await db.query(query, [visitId, userId, notes]);
+        return result.rows[0];
+    }
+
     static async delete(id) {
         // Soft delete
         const query = 'UPDATE visits SET deleted_at = CURRENT_TIMESTAMP WHERE id = $1 AND deleted_at IS NULL';

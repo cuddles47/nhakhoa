@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
-import { FiUsers, FiUploadCloud, FiMenu, FiX, FiChevronLeft, FiChevronRight, FiUser, FiLogOut, FiImage } from 'react-icons/fi'
+import { FiUsers, FiUploadCloud, FiMenu, FiX, FiChevronLeft, FiChevronRight, FiUser, FiLogOut, FiImage, FiDownload } from 'react-icons/fi'
 import { useAuth } from '../features/auth/hooks/useAuth';
 import { MdOutlineHealthAndSafety } from 'react-icons/md'
 
@@ -25,6 +25,12 @@ function Sidebar({ onLogout }) {
       icon: FiImage,
       label: 'Bulk upload ảnh nhuộm',
       description: 'Upload ảnh sau nhuộm'
+    },
+    {
+      path: '/export',
+      icon: FiDownload,
+      label: 'Export Dataset',
+      description: 'Xuất dữ liệu training'
     }
   ]
 
