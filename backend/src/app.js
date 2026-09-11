@@ -18,7 +18,11 @@ const allowedOrigins = [
   'http://localhost:3000',
   'http://127.0.0.1:4004',
   'http://192.168.88.69:4004',
-  'http://100.93.48.110:4004'
+  'http://100.93.48.110:4004',
+  'http://bunbohue.systemcrafts.net',
+  'https://bunbohue.systemcrafts.net',
+  'http://100.85.22.67',
+  'http://100.85.22.67:4004'
 ];
 
 app.use(cors({

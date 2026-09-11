@@ -11,19 +11,19 @@ const { Image } = require('../models');
  */
 const POSITION_VARIATIONS = {
   // Upper positions
-  'upper_right': ['upper_right', 'upper-right', 'top_right', 'top-right', 'tren_phai', 'tren-phai'],
-  'upper_center': ['upper_center', 'upper-center', 'upper_middle', 'upper-middle', 'top_center', 'top-center', 'top_middle', 'top-middle', 'tren_giua', 'tren-giua'],
-  'upper_left': ['upper_left', 'upper-left', 'top_left', 'top-left', 'tren_trai', 'tren-trai'],
+  'upper_right': ['upper_right', 'upper-right', 'top_right', 'top-right', 'tren_phai', 'tren-phai', 'PCT'],
+  'upper_center': ['upper_center', 'upper-center', 'upper_middle', 'upper-middle', 'top_center', 'top-center', 'top_middle', 'top-middle', 'tren_giua', 'tren-giua', 'GCT'],
+  'upper_left': ['upper_left', 'upper-left', 'top_left', 'top-left', 'tren_trai', 'tren-trai', 'TCT'],
   
   // Middle positions
-  'middle_right': ['middle_right', 'middle-right', 'central_right', 'central-right', 'center_right', 'center-right', 'giua_phai', 'giua-phai'],
-  'middle_center': ['middle_center', 'middle-center', 'middle_middle', 'middle-middle', 'central_middle', 'central-middle', 'central_center', 'central-center', 'center', 'giua'],
-  'middle_left': ['middle_left', 'middle-left', 'central_left', 'central-left', 'center_left', 'center-left', 'giua_trai', 'giua-trai'],
+  'middle_right': ['middle_right', 'middle-right', 'central_right', 'central-right', 'center_right', 'center-right', 'giua_phai', 'giua-phai', 'P'],
+  'middle_center': ['middle_center', 'middle-center', 'middle_middle', 'middle-middle', 'central_middle', 'central-middle', 'central_center', 'central-center', 'center', 'giua', 'G'],
+  'middle_left': ['middle_left', 'middle-left', 'central_left', 'central-left', 'center_left', 'center-left', 'giua_trai', 'giua-trai', 'T'],
   
   // Lower positions
-  'lower_right': ['lower_right', 'lower-right', 'bottom_right', 'bottom-right', 'duoi_phai', 'duoi-phai'],
-  'lower_center': ['lower_center', 'lower-center', 'lower_middle', 'lower-middle', 'bottom_center', 'bottom-center', 'bottom_middle', 'bottom-middle', 'duoi_giua', 'duoi-giua'],
-  'lower_left': ['lower_left', 'lower-left', 'bottom_left', 'bottom-left', 'duoi_trai', 'duoi-trai']
+  'lower_right': ['lower_right', 'lower-right', 'bottom_right', 'bottom-right', 'duoi_phai', 'duoi-phai', 'PCD'],
+  'lower_center': ['lower_center', 'lower-center', 'lower_middle', 'lower-middle', 'bottom_center', 'bottom-center', 'bottom_middle', 'bottom-middle', 'duoi_giua', 'duoi-giua', 'GCD'],
+  'lower_left': ['lower_left', 'lower-left', 'bottom_left', 'bottom-left', 'duoi_trai', 'duoi-trai', 'TCD']
 };
 
 /**
@@ -57,10 +57,11 @@ function normalizePositionName(positionName) {
     .trim();
   
   // Try to match with variations
+  // First pass: exact match
   for (const [standardType, variations] of Object.entries(POSITION_VARIATIONS)) {
     for (const variant of variations) {
-      const variantNormalized = variant.replace(/[-_\s]/g, '');
-      if (normalized === variantNormalized || normalized.includes(variantNormalized)) {
+      const variantNormalized = variant.toLowerCase().replace(/[-_\s]/g, '');
+      if (normalized === variantNormalized) {
         // Find position details
         const position = STANDARD_POSITIONS.find(p => p.type === standardType);
         return position || { type: standardType, index: null, label: standardType };
@@ -68,25 +69,62 @@ function normalizePositionName(positionName) {
     }
   }
   
+  // Second pass: partial match (but only for multi-char variants to avoid
+  // single-letter code collisions like 't' matching 'bottomleft')
+  // Use longest-match-wins to avoid collisions (e.g. 'center' vs 'bottomcenter')
+  let bestMatch = null;
+  let bestLength = 0;
+  for (const [standardType, variations] of Object.entries(POSITION_VARIATIONS)) {
+    for (const variant of variations) {
+      const variantNormalized = variant.toLowerCase().replace(/[-_\s]/g, '');
+      if (variantNormalized.length < 2 || variantNormalized.length <= bestLength) continue;
+      if (normalized.includes(variantNormalized)) {
+        bestLength = variantNormalized.length;
+        bestMatch = standardType;
+      }
+    }
+  }
+  
+  if (bestMatch) {
+    const position = STANDARD_POSITIONS.find(p => p.type === bestMatch);
+    return position || { type: bestMatch, index: null, label: bestMatch };
+  }
+  
   return null;
 }
 
 /**
  * Parse filename to extract patient info, date, and position
- * Expected pattern: Patient_0061_28-10-2025_Top-right.jpg
+ * Expected patterns:
+ *  - Old: Patient_0061_28-10-2025_Top-right.jpg
+ *  - New: patient_add_0061_G.jpg (no date, uses current date)
  * @param {string} filename - Original filename
  * @returns {Object|null} - { patientId, date, position, originalName } or null
  */
 function parseStainedFilename(filename) {
-  // Pattern: Patient_XXXX_DD-MM-YYYY_Position.ext
+  // Pattern 1 (old): Patient_XXXX_DD-MM-YYYY_Position.ext
   const pattern = /Patient[_-](\d{4})[_-](\d{2})[_-](\d{2})[_-](\d{4})[_-](.+?)(?:[_.](?:JPG|PNG|jpg|png))?(?:\.rf\.[a-f0-9]+)?\.(?:jpg|jpeg|png)$/i;
   
-  const match = filename.match(pattern);
+  let match = filename.match(pattern);
+  let hasDate = !!match;
+  
   if (!match) {
-    return null;
+    // Pattern 2 (new): patient_add_XXXX_Position.ext (no date)
+    const pattern2 = /(?:patient[_-]add|patient|Patient)[_-](\d{4})[_-](.+?)(?:\.rf\.[a-f0-9]+)?\.(?:jpg|jpeg|png)$/i;
+    match = filename.match(pattern2);
+    
+    if (!match) {
+      return null;
+    }
   }
   
-  const [, patientId, day, month, year, positionRaw] = match;
+  let patientId, day, month, year, positionRaw;
+  
+  if (hasDate) {
+    [, patientId, day, month, year, positionRaw] = match;
+  } else {
+    [, patientId, positionRaw] = match;
+  }
   
   // Normalize position
   const position = normalizePositionName(positionRaw);
@@ -95,7 +133,7 @@ function parseStainedFilename(filename) {
   }
   
   // Format date as YYYY-MM-DD for DB comparison
-  const date = `${year}-${month}-${day}`;
+  const date = hasDate ? `${year}-${month}-${day}` : new Date().toISOString().split('T')[0];
   
   return {
     patientId: `Patient_${patientId}`,

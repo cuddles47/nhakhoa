@@ -3,6 +3,9 @@ import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { bulkUploadImages, getPatients, createPatient } from '../api'
 
+// BUILD-TAG-2026-09-10-B
+console.log('BulkUpload bundle build: 2026-09-10-B (stub-skip + 0-byte guard)')
+
 function BulkUpload() {
   const navigate = useNavigate()
   const [files, setFiles] = useState([])
@@ -41,16 +44,31 @@ function BulkUpload() {
   }
 
   // Parse filename: Patient_0127_26-11-2025_Bottom-left_JPG.rf.c26f53735acf4f0b26dd6ed747ed87f7.jpg
+  //               : patient_add_0001_G.jpg (new format, no date)
   const parseFilename = (filename) => {
-    // Match pattern: Patient_XXXX_DD-MM-YYYY_Position_JPG.rf.hash or Patient_XXXX_DD-MM-YYYY_Position.JPG
-    const regex = /Patient_(\d+)_(\d{2})-(\d{2})-(\d{4})_(.+?)(?:_(?:JPG|PNG|jpg|png))?(?:\.rf\.[a-f0-9]+|\.(jpg|jpeg|png|JPG|JPEG|PNG))$/i
-    const match = filename.match(regex)
+    // Old pattern: Patient_XXXX_DD-MM-YYYY_Position_JPG.rf.hash or Patient_XXXX_DD-MM-YYYY_Position.JPG
+    const oldRegex = /Patient_(\d+)_(\d{2})-(\d{2})-(\d{4})_(.+?)(?:_(?:JPG|PNG|jpg|png))?(?:\.rf\.[a-f0-9]+|\.(jpg|jpeg|png|JPG|JPEG|PNG))$/i
+    let match = filename.match(oldRegex)
+    
+    let patientId, position, visitDate
+    let day, month, year
+    
+    if (match) {
+      [, patientId, day, month, year, position] = match
+      visitDate = `${year}-${month}-${day}`
+    } else {
+      // New pattern: patient_add_XXXX_Position.ext (no date, uses today)
+      const newRegex = /(?:patient[_-]add|patient|Patient)[_-](\d+)_{0,1}(.+?)(?:\.rf\.[a-f0-9]+)?\.(?:jpg|jpeg|png|JPG|JPEG|PNG)$/i
+      match = filename.match(newRegex)
+      if (match) {
+        [, patientId, position] = match
+        visitDate = new Date().toISOString().split('T')[0]
+      }
+    }
     
     if (!match) {
       return null
     }
-    
-    const [, patientId, day, month, year, position] = match
     
     // Normalize position using comprehensive mapping
     const normalizedPosition = normalizePosition(position)
@@ -59,7 +77,7 @@ function BulkUpload() {
     
     return {
       patientId: patientId.padStart(4, '0'),
-      visitDate: `${year}-${month}-${day}`,
+      visitDate,
       position: normalizedPosition,
       filename,
       ext: 'jpg' // Default to jpg since format is complex
@@ -75,22 +93,39 @@ function BulkUpload() {
       .replace(/[-_\s]/g, '')
     
     const positionMap = {
-      'upper_right': ['upperright', 'topright', 'trenphai'],
-      'upper_center': ['uppercenter', 'uppermiddle', 'topcenter', 'topmiddle', 'trengiua'],
-      'upper_left': ['upperleft', 'topleft', 'trentrai'],
-      'middle_right': ['middleright', 'centralright', 'centerright', 'giuaphai'],
-      'middle_center': ['middlecenter', 'middlemiddle', 'centralcenter', 'centralmiddle', 'center', 'giua'],
-      'middle_left': ['middleleft', 'centralleft', 'centerleft', 'giuatrai'],
-      'lower_right': ['lowerright', 'bottomright', 'duoiphai'],
-      'lower_center': ['lowercenter', 'lowermiddle', 'bottomcenter', 'bottommiddle', 'duoigiua'],
-      'lower_left': ['lowerleft', 'bottomleft', 'duoitrai']
+      'upper_right': ['upperright', 'topright', 'trenphai', 'PCT'],
+      'upper_center': ['uppercenter', 'uppermiddle', 'topcenter', 'topmiddle', 'trengiua', 'GCT'],
+      'upper_left': ['upperleft', 'topleft', 'trentrai', 'TCT'],
+      'middle_right': ['middleright', 'centralright', 'centerright', 'giuaphai', 'P'],
+      'middle_center': ['middlecenter', 'middlemiddle', 'centralcenter', 'centralmiddle', 'center', 'giua', 'G'],
+      'middle_left': ['middleleft', 'centralleft', 'centerleft', 'giuatrai', 'T'],
+      'lower_right': ['lowerright', 'bottomright', 'duoiphai', 'PCD'],
+      'lower_center': ['lowercenter', 'lowermiddle', 'bottomcenter', 'bottommiddle', 'duoigiua', 'GCD'],
+      'lower_left': ['lowerleft', 'bottomleft', 'duoitrai', 'TCD']
     }
     
+    // First pass: exact match
     for (const [standardType, variants] of Object.entries(positionMap)) {
-      if (variants.some(v => normalized === v || normalized.includes(v) || v.includes(normalized))) {
+      if (variants.some(v => normalized === v.toLowerCase())) {
         return standardType
       }
     }
+    // Second pass: partial match (multi-char only, longest-match-wins to avoid
+    // single-letter code collisions like 't' matching 'bottomleft', or
+    // 'center' matching inside 'bottomcenter')
+    let best = null
+    let bestLen = 0
+    for (const [standardType, variants] of Object.entries(positionMap)) {
+      for (const v of variants) {
+        const vn = v.toLowerCase()
+        if (vn.length < 2 || vn.length <= bestLen) continue
+        if (normalized.includes(vn) || vn.includes(normalized)) {
+          bestLen = vn.length
+          best = standardType
+        }
+      }
+    }
+    if (best) return best
     
     console.warn(`⚠️ Unknown position: "${positionName}"`)
     return null
@@ -200,16 +235,30 @@ function BulkUpload() {
 
     // Separate image files and annotation file
     const imageFiles = []
+    const sample = []
     
     for (const file of allFiles) {
+      // Skip macOS metadata/stub files
+      if (file.name.startsWith('._') || file.name === '.DS_Store') {
+        continue
+      }
+      
       // Check if it's annotation file (.json)
       if (file.name.endsWith('.json') || file.name.includes('annotation') || file.name.includes('_annotations.coco')) {
         foundAnnotationFile = file
         continue
       }
+
+      // Zero-byte images are unusable (stub / cloud placeholder) - surface them clearly
+      if ((file.type?.startsWith('image/') || /\.(jpe?g|png)$/i.test(file.name)) && file.size === 0) {
+        errors.push(`${file.name} (file rỗng 0 byte / placeholder, không upload được)`)
+        continue
+      }
       
       // Try to parse as image file
-      const info = parseFilename(file.name)
+      const parsedInfo = parseFilename(file.name)
+      if (sample.length < 8) sample.push({ name: file.name, rel: file.webkitRelativePath || null, type: file.type, size: file.size, parsed: !!parsedInfo, pos: parsedInfo && parsedInfo.position })
+      const info = parsedInfo
       if (info) {
         // Check if position was successfully normalized
         if (!info.position) {
@@ -223,7 +272,7 @@ function BulkUpload() {
         }
       } else {
         // Might be image but can't parse filename format
-        if (file.type.startsWith('image/')) {
+        if (file.type?.startsWith('image/') || /\.(jpe?g|png)$/i.test(file.name)) {
           errors.push(`${file.name} (sai định dạng tên file)`)
         }
       }
@@ -236,6 +285,8 @@ function BulkUpload() {
     }
 
     setFiles(imageFiles)
+    console.log(`[HF] total=${allFiles.length} imageFiles=${imageFiles.length} errors=${errors.length} sample=`, JSON.stringify(sample))
+    console.log(`[HF2] sizes=`, JSON.stringify(imageFiles.slice(0, 3).map(f => ({ name: f.name, size: f.size }))))
     
     // Group by patient ID and visit date
     const grouped = parsed.reduce((acc, item) => {
@@ -258,15 +309,6 @@ function BulkUpload() {
     if (foundAnnotationFile) {
       toast.success(`✓ Tìm thấy file annotation: ${foundAnnotationFile.name}`);
       await processAnnotationFile(foundAnnotationFile, groupedArray)
-    } else if (imageFiles.length > 0) {
-      toast('⚠️ Không tìm thấy file annotation (.json) trong folder', {
-        icon: '⚠️',
-        style: {
-          background: '#fff3cd',
-          color: '#856404',
-          border: '1px solid #ffc107'
-        }
-      });
     }
     
     // Reset patient mappings when new files are loaded
@@ -433,18 +475,85 @@ function BulkUpload() {
     e.stopPropagation()
   }
 
-  const handleDrop = (e) => {
+  const collectFilesFromDataTransfer = async (dataTransfer) => {
+    try {
+      if (!dataTransfer?.items || dataTransfer.items.length === 0) {
+        return Array.from(dataTransfer?.files || []);
+      }
+
+      const traverseEntry = async (entry) => {
+        if (!entry) return [];
+
+        if (entry.isFile) {
+          return new Promise((resolve, reject) => {
+            entry.file((file) => resolve([file]), reject);
+          });
+        }
+
+        if (entry.isDirectory) {
+          const reader = entry.createReader();
+          const entries = [];
+
+          await new Promise((resolve, reject) => {
+            const readEntries = () => {
+              reader.readEntries((batch) => {
+                if (!batch.length) {
+                  resolve();
+                  return;
+                }
+                entries.push(...batch);
+                readEntries();
+              }, reject);
+            };
+            readEntries();
+          });
+
+          const files = [];
+          for (const child of entries) {
+            const childFiles = await traverseEntry(child);
+            files.push(...childFiles);
+          }
+          return files;
+        }
+
+        return [];
+      };
+
+      const entries = Array.from(dataTransfer.items)
+        .map(item => (item.webkitGetAsEntry ? item.webkitGetAsEntry() : null))
+        .filter(Boolean);
+
+      if (!entries.length) {
+        return Array.from(dataTransfer.files || []);
+      }
+
+      const files = [];
+      for (const entry of entries) {
+        const entryFiles = await traverseEntry(entry);
+        files.push(...entryFiles);
+      }
+
+      return files;
+    } catch (error) {
+      console.error('Không thể đọc folder từ drag & drop, fallback sang FileList:', error);
+      return Array.from(dataTransfer?.files || []);
+    }
+  }
+
+  const handleDrop = async (e) => {
     e.preventDefault()
     e.stopPropagation()
     setIsDragging(false)
     
-    const files = e.dataTransfer.files
-    handleFiles(files)
+    const fileList = await collectFilesFromDataTransfer(e.dataTransfer)
+    console.log(`[DROP] items=${e.dataTransfer.items.length}`)
+    handleFiles(fileList)
   }
 
   const handleFileSelect = (e) => {
     const files = e.target.files
     handleFiles(files)
+    e.target.value = ''
   }
 
   const handleAnnotationFileClear = () => {
@@ -504,12 +613,6 @@ function BulkUpload() {
       return
     }
 
-    // Validate annotation file
-    if (!annotationFile) {
-      toast.error('⚠️ Vui lòng chọn file annotation (JSON) - Bắt buộc');
-      return
-    }
-
     // Validate: All groups must have patient mapping
     const unmappedGroups = parsedData.filter(group => {
       const groupKey = `${group.patientId}_${group.visitDate}`
@@ -542,6 +645,14 @@ function BulkUpload() {
   const handleConfirmUpload = async () => {
     setShowValidationModal(false)
 
+    if (files.length === 0) {
+      console.error('[U1] BLOCKED: files.length=0, parsedData=', JSON.stringify(parsedData.map(g => g.images.length)))
+      toast.error('⚠️ Không có file ảnh hợp lệ để upload (kiểm tra file rỗng 0 byte / placeholder).', { duration: 8000 })
+      setUploading(false)
+      return
+    }
+    console.log('[U1] files=' + files.length + ' sizes=' + JSON.stringify(files.slice(0, 3).map(f => ({ name: f.name, size: f.size }))))
+
     try {
       setUploading(true)
       setUploadResult(null)
@@ -554,8 +665,10 @@ function BulkUpload() {
         formData.append('images', file)
       })
 
-      // Add annotation file
-      formData.append('annotationFile', annotationFile)
+      // Add annotation file (optional - only if provided)
+      if (annotationFile) {
+        formData.append('annotationFile', annotationFile)
+      }
 
       // Merge parsedData with patientMappings
       const enrichedMetadata = parsedData.map(group => {
@@ -572,16 +685,18 @@ function BulkUpload() {
       formData.append('metadata', JSON.stringify(enrichedMetadata))
 
       // Calculate FormData size (approximate)
-      const totalSize = files.reduce((sum, file) => sum + file.size, 0) + annotationFile.size
-      console.log(`📦 Uploading ${files.length} images (${(totalSize / 1024 / 1024).toFixed(2)} MB)`)
+      const totalSize = files.reduce((sum, file) => sum + file.size, 0) + (annotationFile?.size || 0)
+      console.log(`[U1] Uploading ${files.length} images (${(totalSize / 1024 / 1024).toFixed(2)} MB)`)
       
       toast.loading(`📤 Đang upload ${files.length} ảnh (${(totalSize / 1024 / 1024).toFixed(2)} MB)...`, { id: 'bulk-upload' })
+      console.log('[U2] SENDING bulk-upload request')
     
       const response = await bulkUploadImages(formData, (progressEvent) => {
         const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total)
         setUploadProgress(progress)
         console.log(`Upload progress: ${progress}%`)
       })
+      console.log('[U3] OK status=' + response.status)
       
       const resultData = response.data.data
       
@@ -596,8 +711,8 @@ function BulkUpload() {
         { duration: 5000 }
       )
       
-      // Show warning for images without annotations
-      if (resultData.imagesWithoutAnnotations && resultData.imagesWithoutAnnotations.length > 0) {
+      // Show warning for images without annotations (only when annotation file was provided)
+      if (annotationFile && resultData.imagesWithoutAnnotations && resultData.imagesWithoutAnnotations.length > 0) {
         toast(`⚠️ ${resultData.imagesWithoutAnnotations.length} ảnh không có annotation`, {
           duration: 3000,
           icon: '⚠️',
@@ -630,6 +745,7 @@ function BulkUpload() {
       setSearchResults([])
       
     } catch (error) {
+      console.error('[U4] ERROR:', error)
       console.error('Upload error:', error)
       
       // Dismiss loading toast
@@ -673,7 +789,7 @@ function BulkUpload() {
       <div className="card">
         <h2>Bulk Upload Ảnh RAW</h2>
         <p style={{ color: 'var(--text-sub)', marginBottom: '20px' }}>
-          Upload hàng loạt ảnh với tên file theo format: <code>Patient_XXXX_DD-MM-YYYY_Position.JPG</code>
+          Upload hàng loạt ảnh với tên file theo format: <code>Patient_XXXX_DD-MM-YYYY_Position.JPG</code> hoặc <code>patient_add_XXXX_Position.jpg</code>
         </p>
 
         {/* Upload Result */}
@@ -686,7 +802,7 @@ function BulkUpload() {
                   Đã tạo {uploadResult.data.patientsCreated} bệnh nhân, {uploadResult.data.visitsCreated} lần khám, 
                   {uploadResult.data.imagesCreated} ảnh, và {uploadResult.data.annotationsCreated || 0} annotations.
                 </p>
-                {uploadResult.data.imagesWithoutAnnotations && uploadResult.data.imagesWithoutAnnotations.length > 0 && (
+                {annotationFile && uploadResult.data.imagesWithoutAnnotations && uploadResult.data.imagesWithoutAnnotations.length > 0 && (
                   <p style={{ color: 'var(--warning)', marginTop: '8px' }}>
                     ⚠️ {uploadResult.data.imagesWithoutAnnotations.length} ảnh không có annotation
                   </p>
@@ -775,10 +891,10 @@ function BulkUpload() {
               <>
                 <h3>Kéo thả FOLDER vào đây hoặc click để chọn</h3>
                 <p style={{ color: '#666', marginTop: '10px' }}>
-                  Folder phải chứa: ảnh JPG/PNG + file annotation JSON
+                  Folder chứa: ảnh JPG/PNG theo đúng format tên file (file annotation JSON là tùy chọn)
                 </p>
                 <p style={{ color: '#0369a1', marginTop: '8px', fontSize: '13px', fontWeight: '500' }}>
-                  📁 Hệ thống tự động tìm file annotation trong folder
+                  📁 Hệ thống tự động tìm file annotation trong folder nếu có
                 </p>
               </>
             ) : (

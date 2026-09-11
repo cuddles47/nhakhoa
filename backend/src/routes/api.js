@@ -9,6 +9,7 @@ const bulkUploadController = require('../controllers/BulkUploadController');
 const imageProcessingController = require('../controllers/ImageProcessingController');
 const annotationController = require('../controllers/AnnotationController');
 const exportController = require('../controllers/ExportController');
+const yoloImportController = require('../controllers/YoloImportController');
 const indexController = require('../controllers/index');
 const validate = require('../middleware/validate');
 const { authenticate, optionalAuth } = require('../middleware/auth');
@@ -94,6 +95,9 @@ router.post('/api/export/dataset', authenticate, exportController.exportDataset)
 router.get('/api/exports/:exportId', authenticate, exportController.getExportStatus);
 router.get('/api/exports/:exportId/download', authenticate, exportController.downloadExport);
 router.delete('/api/exports/:exportId', authenticate, exportController.deleteExport);
+
+// YOLO import routes
+router.post('/api/import/yolo', authenticate, yoloImportController.importYolo);
 
 // Proxy route for MinIO images (to avoid CORS issues)
 router.get('/api/images/proxy/*', optionalAuth, async (req, res) => {

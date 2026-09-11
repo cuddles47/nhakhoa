@@ -17,7 +17,16 @@ const testPositions = [
   'Central-middle',
   'center',
   'bottom_left',
-  'duoi-phai'
+  'duoi-phai',
+  'G',
+  'P',
+  'T',
+  'PCD',
+  'GCD',
+  'TCD',
+  'PCT',
+  'GCT',
+  'TCT'
 ];
 
 testPositions.forEach(posName => {
@@ -32,7 +41,13 @@ const testFilenames = [
   'Patient_0062_25-11-2025_Central-middle_JPG.rf.bb04f805bdd851b5a72f6befee533f0e.jpg',
   'Patient_0063_15-12-2025_Bottom_left.png',
   'Patient_0064_01-01-2026_InvalidPosition.jpg',
-  'invalid_filename.jpg'
+  'invalid_filename.jpg',
+  'patient_add_0001_G.jpg',
+  'patient_add_0055_TCD.jpg',
+  'patient_add_0002_P.jpg',
+  'patient_add_0010_GCT.jpg',
+  'patient_add_9999_ZZ.jpg',
+  'patient_add_123.jpg'
 ];
 
 testFilenames.forEach(filename => {

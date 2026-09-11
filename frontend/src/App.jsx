@@ -1,5 +1,6 @@
 import { useAuth } from './features/auth/hooks/useAuth'
 import { Routes, Route, Navigate } from 'react-router-dom'
+import { Toaster } from 'react-hot-toast'
 import Login from './components/Login'
 import Sidebar from './components/Sidebar'
 import PatientList from './components/PatientList'
@@ -29,6 +30,14 @@ function App() {
 
   return (
     <div className="app-layout">
+      <Toaster
+        position="top-right"
+        toastOptions={{
+          style: { zIndex: 99999 },
+          success: { duration: 4000 },
+          error: { duration: 6000 }
+        }}
+      />
       <Sidebar onLogout={logout} />
       <main className="main-container">
         <div className="main-content">

@@ -24,17 +24,32 @@ function StainedBulkUpload() {
   const [uploadResult, setUploadResult] = useState(null);
   
   // Parse filename: Patient_0061_28-10-2025_Bottom-left_JPG.rf.hash.jpg
+  //               : patient_add_0001_G.jpg (new format, no date)
   const parseFilename = (filename) => {
+    // Old pattern
     const regex = /Patient[_-](\d{4})[_-](\d{2})[_-](\d{2})[_-](\d{4})[_-](.+?)(?:[_.](?:JPG|PNG|jpg|png))?(?:\.rf\.[a-f0-9]+)?\.(?:jpg|jpeg|png)$/i;
-    const match = filename.match(regex);
+    let match = filename.match(regex);
     
-    if (!match) return null;
+    let patientId, day, month, year, position, visitDate;
     
-    const [, patientId, day, month, year, position] = match;
+    if (match) {
+      [, patientId, day, month, year, position] = match;
+      visitDate = `${year}-${month}-${day}`;
+    } else {
+      // New pattern: patient_add_XXXX_Position.ext (no date)
+      const regex2 = /(?:patient[_-]add|patient|Patient)[_-](\d{4})[_-](.+?)(?:\.rf\.[a-f0-9]+)?\.(?:jpg|jpeg|png)$/i;
+      match = filename.match(regex2);
+      if (!match) return null;
+      [, patientId, position] = match;
+      day = new Date().getDate().toString().padStart(2, '0');
+      month = (new Date().getMonth() + 1).toString().padStart(2, '0');
+      year = new Date().getFullYear().toString();
+      visitDate = `${year}-${month}-${day}`;
+    }
     
     return {
       patientId: patientId,
-      visitDate: `${year}-${month}-${day}`,
+      visitDate,
       visitDateDisplay: `${day}/${month}/${year}`,
       position: position,
       filename
@@ -470,15 +485,15 @@ function StainedBulkUpload() {
       .replace(/[-_\s]/g, '');
     
     const positionMap = {
-      'upper_right': ['upperright', 'topright', 'trenphai'],
-      'upper_center': ['uppercenter', 'uppermiddle', 'topcenter', 'topmiddle', 'trengiua'],
-      'upper_left': ['upperleft', 'topleft', 'trentrai'],
-      'middle_right': ['middleright', 'centralright', 'centerright', 'giuaphai'],
-      'middle_center': ['middlecenter', 'middlemiddle', 'centralcenter', 'centralmiddle', 'center', 'giua'],
-      'middle_left': ['middleleft', 'centralleft', 'centerleft', 'giuatrai'],
-      'lower_right': ['lowerright', 'bottomright', 'duoiphai'],
-      'lower_center': ['lowercenter', 'lowermiddle', 'bottomcenter', 'bottommiddle', 'duoigiua'],
-      'lower_left': ['lowerleft', 'bottomleft', 'duoitrai']
+      'upper_right': ['upperright', 'topright', 'trenphai', 'PCT'],
+      'upper_center': ['uppercenter', 'uppermiddle', 'topcenter', 'topmiddle', 'trengiua', 'GCT'],
+      'upper_left': ['upperleft', 'topleft', 'trentrai', 'TCT'],
+      'middle_right': ['middleright', 'centralright', 'centerright', 'giuaphai', 'P'],
+      'middle_center': ['middlecenter', 'middlemiddle', 'centralcenter', 'centralmiddle', 'center', 'giua', 'G'],
+      'middle_left': ['middleleft', 'centralleft', 'centerleft', 'giuatrai', 'T'],
+      'lower_right': ['lowerright', 'bottomright', 'duoiphai', 'PCD'],
+      'lower_center': ['lowercenter', 'lowermiddle', 'bottomcenter', 'bottommiddle', 'duoigiua', 'GCD'],
+      'lower_left': ['lowerleft', 'bottomleft', 'duoitrai', 'TCD']
     };
     
     const allPositions = [
@@ -493,11 +508,25 @@ function StainedBulkUpload() {
       { index: 9, type: 'lower_left', label: 'Dưới trái' }
     ];
     
+    // First pass: exact match
     for (const [type, variants] of Object.entries(positionMap)) {
-      if (variants.some(v => normalized.includes(v) || v.includes(normalized))) {
+      if (variants.some(v => normalized === v.toLowerCase())) {
         return allPositions.find(p => p.type === type);
       }
     }
+    // Second pass: partial match (multi-char only, longest-match-wins)
+    let best = null, bestLen = 0;
+    for (const [type, variants] of Object.entries(positionMap)) {
+      for (const v of variants) {
+        const vn = v.toLowerCase();
+        if (vn.length < 2 || vn.length <= bestLen) continue;
+        if (normalized.includes(vn) || vn.includes(normalized)) {
+          bestLen = vn.length;
+          best = type;
+        }
+      }
+    }
+    if (best) return allPositions.find(p => p.type === best);
     
     return null;
   };
@@ -507,7 +536,7 @@ function StainedBulkUpload() {
       <div className="card">
         <h2>Bulk Upload Ảnh Nhuộm</h2>
         <p style={{ color: 'var(--text-sub)', marginBottom: '20px' }}>
-          Upload hàng loạt ảnh nhuộm với tên file theo format: <code>Patient_XXXX_DD-MM-YYYY_Position.jpg</code>
+          Upload hàng loạt ảnh nhuộm với tên file theo format: <code>Patient_XXXX_DD-MM-YYYY_Position.jpg</code> hoặc <code>patient_add_XXXX_Position.jpg</code>
         </p>
         <div
           className={`upload-zone-bulk ${isDragging ? 'dragging' : ''} ${files.length > 0 ? 'has-files' : ''}`}
@@ -539,7 +568,7 @@ function StainedBulkUpload() {
                   Hoặc click để chọn toàn bộ folder chứa ảnh nhuộm
                 </p>
                 <p style={{ color: 'var(--info)', marginTop: '8px', fontSize: '13px', fontWeight: '500' }}>
-                  📝 Format tên file: <code>Patient_0061_28-10-2025_Top-right.jpg</code>
+                  📝 Format tên file: <code>Patient_0061_28-10-2025_Top-right.jpg</code> hoặc <code>patient_add_0061_G.jpg</code>
                 </p>
               </>
             ) : (

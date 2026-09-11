@@ -19,9 +19,9 @@ function splitCOCOByPatient(cocoBuffer, patientIds = null) {
     }
     
     // Group images by patient ID extracted from filename
-    // Expected pattern: Patient_XXXX_Date_Position.ext
+    // Expected patterns: Patient_XXXX_Date_Position.ext or patient_add_XXXX_Position.ext
     const imagesByPatient = {};
-    const patientIdRegex = /Patient_(\d{4})_/i;
+    const patientIdRegex = /(?:Patient|patient(?:[_-]add)?)[_-](\d{4})[_-]/i;
     
     cocoData.images.forEach(img => {
       const match = img.file_name.match(patientIdRegex);
@@ -171,10 +171,17 @@ function matchFilenameToAnnotations(uploadedFilename, imageMap) {
   // Strategy 3: Fuzzy match by extracting key parts (Patient_ID_Date_Position)
   // Extract pattern like: Patient_0062_28-10-2025_Central-right
   const extractPattern = (filename) => {
-    const match = filename.match(/Patient[_-](\d+)[_-](\d{2})[_-](\d{2})[_-](\d{4})[_-](.+?)(?:[_.](?:JPG|PNG|jpg|png))?(?:\.rf\.[a-f0-9]+)?\.?(?:jpg|jpeg|png)?$/i);
-    if (match) {
-      const [, patientId, day, month, year, position] = match;
-      return `${patientId}_${day}${month}${year}_${position}`.toLowerCase().replace(/[-_]/g, '');
+    // Old format: Patient_0062_28-10-2025_Central-right.jpg
+    const oldMatch = filename.match(/Patient[_-](\d+)[_-](\d{2})[_-](\d{2})[_-](\d{4})[_-](.+?)(?:[_.](?:JPG|PNG|jpg|png))?(?:\.rf\.[a-f0-9]+)?\.?(?:jpg|jpeg|png)?$/i);
+    if (oldMatch) {
+      const [, patientId, day, month, year, position] = oldMatch;
+      return `patient${patientId}${day}${month}${year}${position}`.toLowerCase().replace(/[-_]/g, '');
+    }
+    // New format: patient_add_0062_G.jpg
+    const newMatch = filename.match(/(?:patient[_-]add|patient|Patient)[_-](\d+)[_-](.+?)(?:\.rf\.[a-f0-9]+)?\.?(?:jpg|jpeg|png)?$/i);
+    if (newMatch) {
+      const [, patientId, position] = newMatch;
+      return `patient${patientId}${position}`.toLowerCase().replace(/[-_]/g, '');
     }
     return null;
   };

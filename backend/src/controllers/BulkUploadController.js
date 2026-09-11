@@ -17,6 +17,13 @@ class BulkUploadController {
         const client = await pool.connect();
         
         try {
+            // DEBUG-REMOVE: log what arrived so we can root-cause empty image uploads
+            const dbgFiles = (Array.isArray(req.files) ? req.files : []).slice(0, 9).map(f => ({ name: f.originalname, size: f.size, field: f.fieldname }));
+            const dbgLine = `BULK-DEBUG ${new Date().toISOString()} ct=${req.headers['content-type']} reqFiles=${Array.isArray(req.files) ? req.files.length : 0} first=${JSON.stringify(dbgFiles)}`;
+            console.log(dbgLine);
+            try { require('fs').appendFileSync('/tmp/opencode/backend.log', dbgLine + '\n'); } catch (e) {}
+            // END DEBUG-REMOVE
+
             // Parse metadata
             const metadata = JSON.parse(req.body.metadata || '[]');
             
@@ -45,6 +52,12 @@ class BulkUploadController {
                 annotationFile = annotationFiles[0];
                 archiveFiles.push(...(req.files.archive || []));
             }
+
+            // Drop macOS metadata/stub files (._* , .DS_Store)
+            imageFiles = imageFiles.filter((f) => {
+                const name = (f.originalname || '').split(/[\\/]/).pop();
+                return !(name.startsWith('._') || name === '.DS_Store');
+            });
 
             // If an archive (zip) was uploaded, extract it to disk and add files to `imageFiles` (use disk paths to avoid memory pressure)
             const path = require('path');
@@ -89,13 +102,6 @@ class BulkUploadController {
                 }
             }
 
-            if (!annotationFile) {
-                return res.status(400).json({ 
-                    success: false, 
-                    error: 'Annotation file is required' 
-                });
-            }
-
             if (!metadata || metadata.length === 0) {
                 return res.status(400).json({ 
                     success: false, 
@@ -106,21 +112,24 @@ class BulkUploadController {
             if (!imageFiles || imageFiles.length === 0) {
                 return res.status(400).json({ 
                     success: false, 
-                    error: 'No image files uploaded' 
+                    error: 'Không nhận được file ảnh nào (kiểm tra file nguồn có dung lượng thật; file 0 byte/placeholder hoặc file macOS ._* sẽ bị bỏ qua)' 
                 });
             }
 
-            // Parse COCO annotation file and split by patient
+            // Parse COCO annotation file (optional) and split by patient
             let cocoByPatient = {}; // Split COCO files by patient
-            try {
-                // Split COCO file by patient first
-                cocoByPatient = annotationService.splitCOCOByPatient(annotationFile.buffer);
-                console.log('Successfully split COCO file. Found patients:', Object.keys(cocoByPatient));
-            } catch (error) {
-                return res.status(400).json({
-                    success: false,
-                    error: `Failed to parse annotation file: ${error.message}`
-                });
+            if (annotationFile) {
+                try {
+                    cocoByPatient = annotationService.splitCOCOByPatient(annotationFile.buffer);
+                    console.log('Successfully split COCO file. Found patients:', Object.keys(cocoByPatient));
+                } catch (error) {
+                    return res.status(400).json({
+                        success: false,
+                        error: `Failed to parse annotation file: ${error.message}`
+                    });
+                }
+            } else {
+                console.log('No annotation file provided. Importing images only.');
             }
 
             // Start transaction

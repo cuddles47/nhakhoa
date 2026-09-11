@@ -54,6 +54,17 @@ async function processImagesJob(job) {
       const objectName = img.url.replace(/^\/[^/]+\//, '');
       const imageBuffer = await storageService.downloadFile(objectName);
 
+      // Skip invalid/stub image files (e.g. macOS ._* AppleDouble stubs)
+      const isJpeg = imageBuffer.length > 3 && imageBuffer.toString('hex', 0, 2) === 'ffd8';
+      const isPng =
+        imageBuffer.length > 8 && imageBuffer.toString('hex', 0, 8) === '89504e470d0a1a0a';
+      if (!isJpeg && !isPng) {
+        console.warn(
+          `Skipping invalid image ${objectName} (${imageBuffer.length} bytes)`
+        );
+        continue;
+      }
+
       images.push({
         buffer: imageBuffer,
         filename: `image_${img.id}.jpg`,
@@ -81,6 +92,10 @@ async function processImagesJob(job) {
 
     await job.updateProgress(30);
 
+    if (images.length === 0) {
+      throw new Error('Không có ảnh hợp lệ để xử lý (ảnh có thể bị lỗi hoặc là file metadata macOS)');
+    }
+
     const zipBuffer = await imageProcessingService.divideCorners(images, annotations);
 
     await job.updateProgress(50);
@@ -92,6 +107,12 @@ async function processImagesJob(job) {
 
     const processedImagesPath = path.join(tempDir, 'images');
     const processedAnnotationsPath = path.join(tempDir, 'annotations');
+
+    const hasProcessedImages = await fs.access(processedImagesPath).then(() => true).catch(() => false);
+    if (!hasProcessedImages) {
+      throw new Error('Service xử lý ảnh không trả về kết quả (thư mục images rỗng). Kiểm tra ảnh đầu vào.');
+    }
+
     const processedFiles = await fs.readdir(processedImagesPath);
     const totalFiles = processedFiles.length;
 
