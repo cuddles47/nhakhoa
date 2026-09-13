@@ -75,15 +75,15 @@ function BulkUpload() {
       .replace(/[-_\s]/g, '')
     
     const positionMap = {
-      'upper_right': ['upperright', 'topright', 'trenphai'],
-      'upper_center': ['uppercenter', 'uppermiddle', 'topcenter', 'topmiddle', 'trengiua'],
-      'upper_left': ['upperleft', 'topleft', 'trentrai'],
-      'middle_right': ['middleright', 'centralright', 'centerright', 'giuaphai'],
-      'middle_center': ['middlecenter', 'middlemiddle', 'centralcenter', 'centralmiddle', 'center', 'giua'],
-      'middle_left': ['middleleft', 'centralleft', 'centerleft', 'giuatrai'],
-      'lower_right': ['lowerright', 'bottomright', 'duoiphai'],
-      'lower_center': ['lowercenter', 'lowermiddle', 'bottomcenter', 'bottommiddle', 'duoigiua'],
-      'lower_left': ['lowerleft', 'bottomleft', 'duoitrai']
+      'upper_right': ['upperright', 'topright', 'trenphai', 'PCT'],
+      'upper_center': ['uppercenter', 'uppermiddle', 'topcenter', 'topmiddle', 'trengiua', 'GCT'],
+      'upper_left': ['upperleft', 'topleft', 'trentrai', 'TCT'],
+      'middle_right': ['middleright', 'centralright', 'centerright', 'giuaphai', 'P'],
+      'middle_center': ['middlecenter', 'middlemiddle', 'centralcenter', 'centralmiddle', 'center', 'giua', 'G'],
+      'middle_left': ['middleleft', 'centralleft', 'centerleft', 'giuatrai', 'T'],
+      'lower_right': ['lowerright', 'bottomright', 'duoiphai', 'PCD'],
+      'lower_center': ['lowercenter', 'lowermiddle', 'bottomcenter', 'bottommiddle', 'duoigiua', 'GCD'],
+      'lower_left': ['lowerleft', 'bottomleft', 'duoitrai', 'TCD']
     }
     
     for (const [standardType, variants] of Object.entries(positionMap)) {
