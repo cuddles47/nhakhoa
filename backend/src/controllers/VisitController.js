@@ -1,4 +1,5 @@
 const { Visit } = require('../models');
+const minioClient = require('../config/minio');
 
 class VisitController {
     async getAllVisits(req, res) {
@@ -88,6 +89,22 @@ class VisitController {
     async deleteVisit(req, res) {
         try {
             const { id } = req.params;
+            const BUCKET = process.env.MINIO_BUCKET || 'nhakhoa';
+
+            // Delete MinIO objects for this visit
+            const prefix = `visits/${id}/`;
+            const objectsList = [];
+            const stream = minioClient.listObjects(BUCKET, prefix, true);
+            await new Promise((resolve, reject) => {
+                stream.on('data', obj => objectsList.push(obj.name));
+                stream.on('end', resolve);
+                stream.on('error', reject);
+            });
+            if (objectsList.length > 0) {
+                await minioClient.removeObjects(BUCKET, objectsList);
+                console.log(`Deleted ${objectsList.length} MinIO objects for visit ${id}`);
+            }
+
             await Visit.delete(id);
             res.json({ success: true, message: 'Visit deleted successfully' });
         } catch (error) {

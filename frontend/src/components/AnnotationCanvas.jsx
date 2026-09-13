@@ -50,7 +50,11 @@ const AnnotationCanvas = ({
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     // Draw image
     ctx.drawImage(img, 0, 0);
-    
+
+    // Compute scale from original image coordinates to display coordinates
+    const scaleX = (imageWidth && imageWidth > 0) ? canvas.width / imageWidth : 1;
+    const scaleY = (imageHeight && imageHeight > 0) ? canvas.height / imageHeight : 1;
+
     // Draw annotations
     try {
       teeth.forEach((tooth) => {
@@ -60,21 +64,25 @@ const AnnotationCanvas = ({
         if (toothBox.length !== 4) return;
         const invalidElements = toothBox.filter((v) => typeof v !== 'number');
         if (invalidElements.length > 0) return;
+        const tx = toothBox[0] * scaleX, ty = toothBox[1] * scaleY;
+        const tw = toothBox[2] * scaleX, th = toothBox[3] * scaleY;
         ctx.strokeStyle = '#10b981'; // Green for tooth
         ctx.lineWidth = 2;
-        ctx.strokeRect(toothBox[0], toothBox[1], toothBox[2], toothBox[3]);
+        ctx.strokeRect(tx, ty, tw, th);
         // Draw label
         ctx.fillStyle = 'rgba(16, 185, 129, 0.8)';
-        ctx.fillRect(toothBox[0], toothBox[1] - 20, 60, 20);
+        ctx.fillRect(tx, ty - 20, 60, 20);
         ctx.fillStyle = 'white';
         ctx.font = '12px sans-serif';
-        ctx.fillText(`Tooth ${tooth.category_name}`, toothBox[0] + 5, toothBox[1] - 6);
+        ctx.fillText(`Tooth ${tooth.category_name}`, tx + 5, ty - 6);
         // Draw subboxes
         if (!tooth.subboxes || !Array.isArray(tooth.subboxes)) return;
         tooth.subboxes.forEach((subbox) => {
           const box = subbox.bbox;
           if (!Array.isArray(box) || box.length !== 4) return;
           const isHovered = hoveredSubbox?.subbox_id === subbox.subbox_id;
+          const sx = box[0] * scaleX, sy = box[1] * scaleY;
+          const sw = box[2] * scaleX, sh = box[3] * scaleY;
           // Determine color based on plaque status (always 0 or 1 after processing)
           let fillColor, strokeColor;
           if (subbox.plaque_status === 1) {
@@ -86,26 +94,26 @@ const AnnotationCanvas = ({
           }
           // Fill subbox
           ctx.fillStyle = fillColor;
-          ctx.fillRect(box[0], box[1], box[2], box[3]);
+          ctx.fillRect(sx, sy, sw, sh);
           // Stroke subbox
           ctx.strokeStyle = strokeColor;
           ctx.lineWidth = isHovered ? 4 : 2;
-          ctx.strokeRect(box[0], box[1], box[2], box[3]);
+          ctx.strokeRect(sx, sy, sw, sh);
           // If hovered, add highlight
           if (isHovered) {
             ctx.strokeStyle = '#FFD700'; // Gold
             ctx.lineWidth = 3;
             ctx.setLineDash([5, 5]);
-            ctx.strokeRect(box[0], box[1], box[2], box[3]);
+            ctx.strokeRect(sx, sy, sw, sh);
             ctx.setLineDash([]);
           }
           // Draw region label
           const label = subbox.region.charAt(0).toUpperCase();
           ctx.fillStyle = strokeColor;
-          ctx.fillRect(box[0], box[1], 18, 18);
+          ctx.fillRect(sx, sy, 18, 18);
           ctx.fillStyle = 'white';
           ctx.font = 'bold 12px sans-serif';
-          ctx.fillText(label, box[0] + 5, box[1] + 13);
+          ctx.fillText(label, sx + 5, sy + 13);
         });
       });
     } catch (err) {}
@@ -129,15 +137,19 @@ const AnnotationCanvas = ({
   };
 
   const findSubboxAtPoint = (x, y) => {
-    let subboxIndex = 0;
+    const sx = (imageWidth && imageWidth > 0) ? (canvasRef.current?.width || 1) / imageWidth : 1;
+    const sy = (imageHeight && imageHeight > 0) ? (canvasRef.current?.height || 1) / imageHeight : 1;
     for (const tooth of teeth) {
+      if (!tooth.subboxes) continue;
       for (const subbox of tooth.subboxes) {
         const box = subbox.bbox;
-        const matches = x >= box[0] && x <= box[0] + box[2] && y >= box[1] && y <= box[1] + box[3];
+        if (!Array.isArray(box) || box.length !== 4) continue;
+        const bx = box[0] * sx, by = box[1] * sy;
+        const bw = box[2] * sx, bh = box[3] * sy;
+        const matches = x >= bx && x <= bx + bw && y >= by && y <= by + bh;
         if (matches) {
           return { tooth, subbox };
         }
-        subboxIndex++;
       }
     }
     return null;

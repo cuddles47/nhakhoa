@@ -22,6 +22,7 @@ const ProcessedImageViewer = ({
   const [lightboxImage, setLightboxImage] = useState(null); // { url, label, position, stainedUrl, imageId, image }
   const [annotations, setAnnotations] = useState([]); // teeth array with subboxes
   const [annotationStats, setAnnotationStats] = useState(null);
+  const [imageDimensions, setImageDimensions] = useState({ width: 0, height: 0 });
   const [rotation, setRotation] = useState(0); // Current rotation angle (0, 90, 180, 270)
   const [isRotating, setIsRotating] = useState(false); // Saving rotation in progress
   const [recentlyRotated, setRecentlyRotated] = useState(false); // Flag to suppress warning during rotation
@@ -217,6 +218,9 @@ const ProcessedImageViewer = ({
       console.log('📊 Progress:', result.data?.progress);
       console.log('🦷 Full teeth structure:', JSON.stringify(result.data?.teeth, null, 2));
       setAnnotations(result.data?.teeth || []);
+      if (result.data?.image?.width && result.data?.image?.height) {
+        setImageDimensions({ width: result.data.image.width, height: result.data.image.height });
+      }
       // Ensure percentage is a number
       const progress = result.data?.progress;
       if (progress && typeof progress === 'object') {
@@ -938,6 +942,8 @@ const ProcessedImageViewer = ({
                     <AnnotationCanvas
                       imageUrl={displayUrl}
                       teeth={annotations}
+                      imageWidth={imageDimensions.width}
+                      imageHeight={imageDimensions.height}
                       onSubboxClick={handleSubboxClick}
                     />
                   </div>

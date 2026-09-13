@@ -1,4 +1,7 @@
 const { Patient } = require('../models');
+const storage = require('../services/storage');
+const minioClient = require('../config/minio');
+const { pool } = require('../config/database');
 
 class PatientController {
     async getAllPatients(req, res) {
@@ -79,13 +82,43 @@ class PatientController {
     }
 
     async deletePatient(req, res) {
+        const client = await pool.connect();
         try {
             const { id } = req.params;
+            const BUCKET = process.env.MINIO_BUCKET || 'nhakhoa';
+
+            // Get all visit IDs for this patient
+            const visitsResult = await client.query(
+                'SELECT id FROM visits WHERE patient_id = $1', [id]
+            );
+            const visitIds = visitsResult.rows.map(r => r.id);
+
+            // Get all image object prefixes for those visits
+            if (visitIds.length > 0) {
+                for (const visitId of visitIds) {
+                    const prefix = `visits/${visitId}/`;
+                    const objectsList = [];
+                    const stream = minioClient.listObjects(BUCKET, prefix, true);
+                    await new Promise((resolve, reject) => {
+                        stream.on('data', obj => objectsList.push(obj.name));
+                        stream.on('end', resolve);
+                        stream.on('error', reject);
+                    });
+                    if (objectsList.length > 0) {
+                        await minioClient.removeObjects(BUCKET, objectsList);
+                        console.log(`Deleted ${objectsList.length} MinIO objects for visit ${visitId}`);
+                    }
+                }
+            }
+
+            // Soft-delete patient (visits/images cascade via soft-delete or FK)
             await Patient.delete(id);
             res.json({ success: true, message: 'Patient deleted successfully' });
         } catch (error) {
             console.error('Error deleting patient:', error);
             res.status(500).json({ success: false, error: error.message });
+        } finally {
+            client.release();
         }
     }
 }

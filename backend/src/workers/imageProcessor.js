@@ -72,7 +72,9 @@ async function processImagesJob(job) {
 
       const dbAnnotations = await Annotation.findByImageId(img.id);
 
-      if (dbAnnotations.length === 0) {
+      const parentAnnotations = dbAnnotations.filter(a => !a.parent_annotation_id);
+
+      if (parentAnnotations.length === 0) {
         const dummyAnnotation = `11 0.5 0.5 0.1 0.15\n13 0.5 0.5 0.05 0.05`;
         annotations.push({
           buffer: Buffer.from(dummyAnnotation),
@@ -81,7 +83,7 @@ async function processImagesJob(job) {
       } else {
         const imageWidth = img.width || 6240;
         const imageHeight = img.height || 4160;
-        const yoloAnnotations = Annotation.convertToYOLO(dbAnnotations, imageWidth, imageHeight);
+        const yoloAnnotations = Annotation.convertToYOLO(parentAnnotations, imageWidth, imageHeight);
         const yoloText = Annotation.formatYOLOText(yoloAnnotations);
         annotations.push({
           buffer: Buffer.from(yoloText),
@@ -239,15 +241,11 @@ async function parseAndSaveSubboxes(
 
   await db.query(
     `DELETE FROM image_annotations 
-     WHERE image_id = $1 AND parent_annotation_id IS NOT NULL`,
+     WHERE image_id = $1 AND parent_annotation_id IS NOT NULL AND source_type = 'python_subbox'`,
     [imageId]
   );
 
-  if (!processedWidth || !processedHeight || processedWidth === 0 || processedHeight === 0) return;
   if (!originalWidth || !originalHeight || originalWidth === 0 || originalHeight === 0) return;
-
-  const scaleX = originalWidth / processedWidth;
-  const scaleY = originalHeight / processedHeight;
 
   const teethResult = await db.query(
     `SELECT id, category_id, category_name, bbox, coco_image_id 
@@ -275,33 +273,27 @@ async function parseAndSaveSubboxes(
     const height = parseFloat(parts[4]);
     const toothId = parts.length === 6 ? parseInt(parts[5]) : null;
 
-    const xProcessed = Math.round((xCenter - width / 2) * processedWidth);
-    const yProcessed = Math.round((yCenter - height / 2) * processedHeight);
-    const wProcessed = Math.round(width * processedWidth);
-    const hProcessed = Math.round(height * processedHeight);
+    // Python normalizes relative to original image dims, so scale directly to pixels
+    const x = Math.round((xCenter - width / 2) * originalWidth);
+    const y = Math.round((yCenter - height / 2) * originalHeight);
+    const w = Math.round(width * originalWidth);
+    const h = Math.round(height * originalHeight);
 
     if (toothId !== null) {
-      const x = Math.round(xProcessed * scaleX);
-      const y = Math.round(yProcessed * scaleY);
-      const w = Math.round(wProcessed * scaleX);
-      const h = Math.round(hProcessed * scaleY);
       subboxes.push({ classId, x, y, w, h, toothId });
     } else {
-      const x = Math.round(xProcessed * scaleX);
-      const y = Math.round(yProcessed * scaleY);
-      const w = Math.round(wProcessed * scaleX);
-      const h = Math.round(hProcessed * scaleY);
       teeth.push({ classId, x, y, w, h });
     }
   }
 
+  // Map Python tooth CLASS → DB tooth id by category_id
   const toothClassIdMap = {};
-  for (let i = 0; i < Math.min(teeth.length, dbTeeth.length); i++) {
-    const cls = teeth[i].classId;
-    toothClassIdMap[cls] = dbTeeth[i].id;
+  for (const dbTooth of dbTeeth) {
+    toothClassIdMap[dbTooth.category_id] = dbTooth.id;
   }
 
-  const regionNames = ['top_left', 'top_right', 'bottom_left', 'bottom_right'];
+  // Python emits subboxes per tooth in order: gingival (G), incisal (I), mesial (M), distal (D)
+  const regionNames = ['gingival', 'incisal', 'mesial', 'distal'];
   const regionIndexMap = {};
 
   for (const subbox of subboxes) {
@@ -317,12 +309,13 @@ async function parseAndSaveSubboxes(
     const plaqueStatus = subbox.classId === 1 ? 1 : 0;
 
     const existingSubbox = await db.query(
-      `SELECT id FROM image_annotations 
+      `SELECT id, source_type FROM image_annotations 
        WHERE image_id = $1 AND parent_annotation_id = $2 AND subbox_region = $3`,
       [imageId, parentId, region]
     );
 
     if (existingSubbox.rows.length > 0) {
+      if (existingSubbox.rows[0].source_type === 'doctor_upload') continue;
       await db.query(
         `UPDATE image_annotations SET
           bbox = $1::jsonb, area = $2, category_id = $3, category_name = $4,
@@ -331,14 +324,15 @@ async function parseAndSaveSubboxes(
         [JSON.stringify(bbox), area, subbox.classId, region, plaqueStatus, 1, existingSubbox.rows[0].id]
       );
     } else {
+      const dbTooth = dbTeeth.find((t) => t.id === parentId);
       await db.query(
         `INSERT INTO image_annotations (
           image_id, coco_image_id, category_id, category_name, bbox, area,
           parent_annotation_id, subbox_region, source_type, plaque_status, predicted_plaque
-        ) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, 'python_subbox', 1, $9)`,
+        ) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, 'python_subbox', $9, $10)`,
         [
           imageId,
-          dbTeeth.find((t) => t.id === parentId).coco_image_id,
+          dbTooth ? dbTooth.coco_image_id : null,
           subbox.classId,
           region,
           JSON.stringify(bbox),
@@ -346,10 +340,16 @@ async function parseAndSaveSubboxes(
           parentId,
           region,
           plaqueStatus,
+          plaqueStatus,
         ]
       );
     }
   }
+
+  await db.query(
+    'UPDATE images SET has_annotations = true, annotation_count = annotation_count + $1 WHERE id = $2',
+    [subboxes.length, imageId]
+  );
 }
 
 let worker = null;

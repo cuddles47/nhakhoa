@@ -3,8 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { bulkUploadImages, getPatients, createPatient } from '../api'
 
-// BUILD-TAG-2026-09-10-B
-console.log('BulkUpload bundle build: 2026-09-10-B (stub-skip + 0-byte guard)')
+
 
 function BulkUpload() {
   const navigate = useNavigate()
@@ -19,6 +18,7 @@ function BulkUpload() {
   // Annotation file state
   const [annotationFile, setAnnotationFile] = useState(null)
   const [annotationPreview, setAnnotationPreview] = useState(null)
+  const [yoloLabelFiles, setYoloLabelFiles] = useState([])
   
   // Patient mapping: { groupKey: { type: 'existing'|'new', patient: {...} } }
   const [patientMappings, setPatientMappings] = useState({})
@@ -73,8 +73,6 @@ function BulkUpload() {
     // Normalize position using comprehensive mapping
     const normalizedPosition = normalizePosition(position)
     
-    console.log(`📸 Parsed ${filename}: position="${position}" -> normalized="${normalizedPosition}"`)
-    
     return {
       patientId: patientId.padStart(4, '0'),
       visitDate,
@@ -127,7 +125,6 @@ function BulkUpload() {
     }
     if (best) return best
     
-    console.warn(`⚠️ Unknown position: "${positionName}"`)
     return null
   }
 
@@ -236,6 +233,7 @@ function BulkUpload() {
     // Separate image files and annotation file
     const imageFiles = []
     const sample = []
+    const parsedYoloLabels = []
     
     for (const file of allFiles) {
       // Skip macOS metadata/stub files
@@ -246,6 +244,14 @@ function BulkUpload() {
       // Check if it's annotation file (.json)
       if (file.name.endsWith('.json') || file.name.includes('annotation') || file.name.includes('_annotations.coco')) {
         foundAnnotationFile = file
+        continue
+      }
+
+      // Collect YOLO label files (.txt)
+      if (file.name.endsWith('.txt')) {
+        const base = file.name.replace(/\.txt$/i, '').split(/[\\/]/).pop()
+        if (base) sample.length // just use it for sample if needed
+        parsedYoloLabels.push(file)
         continue
       }
 
@@ -285,8 +291,14 @@ function BulkUpload() {
     }
 
     setFiles(imageFiles)
-    console.log(`[HF] total=${allFiles.length} imageFiles=${imageFiles.length} errors=${errors.length} sample=`, JSON.stringify(sample))
-    console.log(`[HF2] sizes=`, JSON.stringify(imageFiles.slice(0, 3).map(f => ({ name: f.name, size: f.size }))))
+    setYoloLabelFiles(parsedYoloLabels)
+    if (parsedYoloLabels.length > 0) {
+      toast(`📋 Đã phát hiện ${parsedYoloLabels.length} file label YOLO (.txt)`, { duration: 3000, icon: '📋' })
+    }
+
+    if (allFiles.length > 0 && imageFiles.length === 0) {
+      toast.error('Thư mục chỉ chứa file placeholder (cloud-sync) — vui lòng kéo thả thư mục trực tiếp thay vì click chọn.', { duration: 8000 })
+    }
     
     // Group by patient ID and visit date
     const grouped = parsed.reduce((acc, item) => {
@@ -361,7 +373,7 @@ function BulkUpload() {
         }
         // If multiple matches, leave unassigned for manual selection
       } catch (error) {
-        console.error(`Error auto-assigning patient ${group.patientId}:`, error)
+        // silently skip auto-assign on error
       }
     }
     
@@ -546,7 +558,6 @@ function BulkUpload() {
     setIsDragging(false)
     
     const fileList = await collectFilesFromDataTransfer(e.dataTransfer)
-    console.log(`[DROP] items=${e.dataTransfer.items.length}`)
     handleFiles(fileList)
   }
 
@@ -588,12 +599,10 @@ function BulkUpload() {
 
     parsedData.forEach(group => {
       const uploadedPositions = group.images.map(img => img.position)
-      console.log(`🔍 Patient ${group.patientId}: Uploaded positions:`, uploadedPositions)
       const missingPositions = expectedPositions.filter(pos => !uploadedPositions.includes(pos))
       
       if (missingPositions.length > 0) {
         const missingLabels = missingPositions.map(pos => positionLabels[pos] || pos)
-        console.log(`⚠️ Patient ${group.patientId}: Missing ${missingPositions.length} positions:`, missingPositions)
         missingReport.push({
           patientId: group.patientId,
           visitDate: group.visitDate,
@@ -646,12 +655,10 @@ function BulkUpload() {
     setShowValidationModal(false)
 
     if (files.length === 0) {
-      console.error('[U1] BLOCKED: files.length=0, parsedData=', JSON.stringify(parsedData.map(g => g.images.length)))
       toast.error('⚠️ Không có file ảnh hợp lệ để upload (kiểm tra file rỗng 0 byte / placeholder).', { duration: 8000 })
       setUploading(false)
       return
     }
-    console.log('[U1] files=' + files.length + ' sizes=' + JSON.stringify(files.slice(0, 3).map(f => ({ name: f.name, size: f.size }))))
 
     try {
       setUploading(true)
@@ -670,6 +677,11 @@ function BulkUpload() {
         formData.append('annotationFile', annotationFile)
       }
 
+      // Add YOLO label files (.txt)
+      if (yoloLabelFiles.length > 0) {
+        yoloLabelFiles.forEach(file => formData.append('labels', file))
+      }
+
       // Merge parsedData with patientMappings
       const enrichedMetadata = parsedData.map(group => {
         const groupKey = `${group.patientId}_${group.visitDate}`
@@ -686,17 +698,13 @@ function BulkUpload() {
 
       // Calculate FormData size (approximate)
       const totalSize = files.reduce((sum, file) => sum + file.size, 0) + (annotationFile?.size || 0)
-      console.log(`[U1] Uploading ${files.length} images (${(totalSize / 1024 / 1024).toFixed(2)} MB)`)
       
       toast.loading(`📤 Đang upload ${files.length} ảnh (${(totalSize / 1024 / 1024).toFixed(2)} MB)...`, { id: 'bulk-upload' })
-      console.log('[U2] SENDING bulk-upload request')
     
       const response = await bulkUploadImages(formData, (progressEvent) => {
         const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total)
         setUploadProgress(progress)
-        console.log(`Upload progress: ${progress}%`)
       })
-      console.log('[U3] OK status=' + response.status)
       
       const resultData = response.data.data
       
@@ -735,6 +743,7 @@ function BulkUpload() {
       setPatientMappings({})
       setAnnotationFile(null)
       setAnnotationPreview(null)
+      setYoloLabelFiles([])
       
       // Redirect to patients page after short delay
       setTimeout(() => {
@@ -745,10 +754,6 @@ function BulkUpload() {
       setSearchResults([])
       
     } catch (error) {
-      console.error('[U4] ERROR:', error)
-      console.error('Upload error:', error)
-      
-      // Dismiss loading toast
       toast.dismiss('bulk-upload')
       
       let errorMsg = error.message
@@ -776,6 +781,7 @@ function BulkUpload() {
   const handleClear = () => {
     setFiles([])
     setParsedData([])
+    setYoloLabelFiles([])
     setUploadResult(null)
     setAnnotationFile(null)
     setAnnotationPreview(null)

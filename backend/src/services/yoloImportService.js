@@ -207,6 +207,115 @@ async function insertAnnotation(client, data) {
 }
 
 /**
+ * Import annotations cho mot image da co trong DB (parent teeth + subbox children).
+ * Dung chung cho ca importPatientFolder va attachYoloLabelsToVisit.
+ * @param {any} client
+ * @param {Object} imageRow - row tu bang images (id, coco_image_id, width, height)
+ * @param {string} content - noi dung file label YOLO
+ * @param {Object} stats - object thong ke de cap nhat
+ * @returns {Promise<number>} so annotation da insert
+ */
+async function importAnnotationsForImage(client, imageRow, content, stats) {
+  const entries = parseYoloLabel(content);
+  const subboxList = entries.filter(e => e.kind === 'subbox');
+  const toothList = entries.filter(e => e.kind === 'tooth');
+
+  const dims = { width: imageRow.width || 6240, height: imageRow.height || 4160 };
+
+  const parentsMap = new Map();
+  for (const entry of subboxList) {
+    const bbox = yoloToPixelBbox(entry, dims);
+    if (bbox.w <= 0 || bbox.h <= 0) {
+      stats.annotations.skippedLines++;
+      continue;
+    }
+    if (!parentsMap.has(entry.parent_tooth_class)) parentsMap.set(entry.parent_tooth_class, []);
+    parentsMap.get(entry.parent_tooth_class).push({ entry, bbox });
+  }
+
+  let imageSubboxCount = 0;
+  const annotationsInserted = [];
+
+  if (toothList.length > 0 && subboxList.length === 0) {
+    for (const entry of toothList) {
+      const toothBbox = yoloToPixelBbox(entry, dims);
+      if (toothBbox.w <= 0 || toothBbox.h <= 0) {
+        stats.annotations.skippedLines++;
+        continue;
+      }
+      const parent = await insertAnnotation(client, {
+        image_id: imageRow.id,
+        coco_image_id: imageRow.id,
+        category_id: entry.class_id,
+        category_name: toothCategoryName(entry.class_id),
+        bbox: [toothBbox.x, toothBbox.y, toothBbox.w, toothBbox.h],
+        area: toothBbox.w * toothBbox.h,
+        source_type: 'doctor_upload'
+      });
+      stats.annotations.teeth++;
+      annotationsInserted.push(parent);
+    }
+  }
+
+  for (const [parentClass, subboxRows] of parentsMap.entries()) {
+    const minX = Math.min(...subboxRows.map(r => r.bbox.x));
+    const minY = Math.min(...subboxRows.map(r => r.bbox.y));
+    const maxX = Math.max(...subboxRows.map(r => r.bbox.x + r.bbox.w));
+    const maxY = Math.max(...subboxRows.map(r => r.bbox.y + r.bbox.h));
+    const parentBbox = [minX, minY, maxX - minX, maxY - minY];
+
+    if (parentBbox[2] <= 0 || parentBbox[3] <= 0) {
+      stats.annotations.skippedLines += subboxRows.length;
+      continue;
+    }
+
+    const parent = await insertAnnotation(client, {
+      image_id: imageRow.id,
+      coco_image_id: imageRow.id,
+      category_id: parentClass,
+      category_name: toothCategoryName(parentClass),
+      bbox: parentBbox,
+      area: parentBbox[2] * parentBbox[3],
+      source_type: 'doctor_upload'
+    });
+    stats.annotations.teeth++;
+    annotationsInserted.push(parent);
+
+    const subboxInserts = subboxRows.map((row, regionIdx) => {
+      const region = REGION_NAMES[regionIdx % REGION_NAMES.length];
+      return insertAnnotation(client, {
+        image_id: imageRow.id,
+        coco_image_id: imageRow.id,
+        category_id: row.entry.class_id,
+        category_name: region,
+        bbox: [row.bbox.x, row.bbox.y, row.bbox.w, row.bbox.h],
+        area: row.bbox.w * row.bbox.h,
+        parent_annotation_id: parent.id,
+        subbox_region: region,
+        source_type: 'doctor_upload',
+        plaque_status: row.entry.class_id
+      });
+    });
+    const inserted = await Promise.all(subboxInserts);
+    annotationsInserted.push(...inserted);
+  }
+
+  imageSubboxCount = annotationsInserted.length;
+  stats.annotations.subboxes += imageSubboxCount;
+  stats.annotations.total += imageSubboxCount;
+
+  if (imageSubboxCount > 0) {
+    await client.query(
+      'UPDATE images SET has_annotations = true, annotation_count = $1 WHERE id = $2',
+      [imageSubboxCount, imageRow.id]
+    );
+    stats.annotations.imagesWithAnnotations++;
+  }
+
+  return imageSubboxCount;
+}
+
+/**
  * Import một patient folder (cấu trúc patient_add_XXXX/{images,labels})
  * Mỗi folder chạy trong 1 transaction riêng.
  * @param {string} folderPath Đường dẫn folder patient
@@ -317,113 +426,109 @@ async function importPatientFolder(folderPath) {
         ]
       );
 
-      // Đọc label file cùng basename
+      // Read label file + import annotations
       const baseName = path.parse(fileName).name;
       const labelPath = path.join(labelsDir, `${baseName}.txt`);
-      let entries = [];
+      let content = '';
       if (fs.existsSync(labelPath) && fs.statSync(labelPath).isFile()) {
-        const content = fs.readFileSync(labelPath, 'utf-8');
-        entries = parseYoloLabel(content);
+        content = fs.readFileSync(labelPath, 'utf-8');
       }
 
-      const imageRow = image.rows[0];
-      const subboxList = entries.filter(e => e.kind === 'subbox');
-      const toothList = entries.filter(e => e.kind === 'tooth');
-
-      // Phân nhóm subbox theo parent_tooth_class để dựng parent tooth (union bbox)
-      const parentsMap = new Map();
-      for (const entry of subboxList) {
-        const bbox = yoloToPixelBbox(entry, dims);
-        if (bbox.w <= 0 || bbox.h <= 0) {
-          stats.annotations.skippedLines++;
-          continue;
-        }
-        if (!parentsMap.has(entry.parent_tooth_class)) parentsMap.set(entry.parent_tooth_class, []);
-        parentsMap.get(entry.parent_tooth_class).push({ entry, bbox });
-      }
-
-      let imageSubboxCount = 0;
-      const annotationsInserted = [];
-
-      // Tooth-detection entries (5 field) → mỗi entry là một parent annotation độc lập
-      if (toothList.length > 0 && subboxList.length === 0) {
-        for (const entry of toothList) {
-          const toothBbox = yoloToPixelBbox(entry, dims);
-          if (toothBbox.w <= 0 || toothBbox.h <= 0) {
-            stats.annotations.skippedLines++;
-            continue;
-          }
-          const parent = await insertAnnotation(client, {
-            image_id: imageRow.id,
-            coco_image_id: imageRow.id,
-            category_id: entry.class_id,
-            category_name: toothCategoryName(entry.class_id),
-            bbox: [toothBbox.x, toothBbox.y, toothBbox.w, toothBbox.h],
-            area: toothBbox.w * toothBbox.h,
-            source_type: 'doctor_upload'
-          });
-          stats.annotations.teeth++;
-          annotationsInserted.push(parent);
-        }
-      }
-
-      // Plaque subboxes → parent tooth (union) + subbox children
-      for (const [parentClass, subboxRows] of parentsMap.entries()) {
-        const minX = Math.min(...subboxRows.map(r => r.bbox.x));
-        const minY = Math.min(...subboxRows.map(r => r.bbox.y));
-        const maxX = Math.max(...subboxRows.map(r => r.bbox.x + r.bbox.w));
-        const maxY = Math.max(...subboxRows.map(r => r.bbox.y + r.bbox.h));
-        const parentBbox = [minX, minY, maxX - minX, maxY - minY];
-
-        if (parentBbox[2] <= 0 || parentBbox[3] <= 0) {
-          stats.annotations.skippedLines += subboxRows.length;
-          continue;
-        }
-
-        const parent = await insertAnnotation(client, {
-          image_id: imageRow.id,
-          coco_image_id: imageRow.id,
-          category_id: parentClass,
-          category_name: toothCategoryName(parentClass),
-          bbox: parentBbox,
-          area: parentBbox[2] * parentBbox[3],
-          source_type: 'doctor_upload'
-        });
-        stats.annotations.teeth++;
-        annotationsInserted.push(parent);
-
-        const subboxInserts = subboxRows.map((row, regionIdx) => {
-          const region = REGION_NAMES[regionIdx % REGION_NAMES.length];
-          return insertAnnotation(client, {
-            image_id: imageRow.id,
-            coco_image_id: imageRow.id,
-            category_id: row.entry.class_id,
-            category_name: region,
-            bbox: [row.bbox.x, row.bbox.y, row.bbox.w, row.bbox.h],
-            area: row.bbox.w * row.bbox.h,
-            parent_annotation_id: parent.id,
-            subbox_region: region,
-            source_type: 'doctor_upload',
-            plaque_status: row.entry.class_id
-          });
-        });
-        const inserted = await Promise.all(subboxInserts);
-        annotationsInserted.push(...inserted);
-      }
-
-      imageSubboxCount = annotationsInserted.length;
-      stats.annotations.subboxes += imageSubboxCount;
-      stats.annotations.total += imageSubboxCount;
-
-      if (imageSubboxCount > 0) {
-        await client.query(
-          'UPDATE images SET has_annotations = true, annotation_count = $1 WHERE id = $2',
-          [imageSubboxCount, imageRow.id]
-        );
-        stats.annotations.imagesWithAnnotations++;
+      if (content.trim()) {
+        await importAnnotationsForImage(client, image.rows[0], content, stats);
       }
 
       stats.images.imported++;
+    }
+
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    stats.error = err.message;
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  return stats;
+}
+
+/**
+ * Gan labels YOLO vao visit da co (khong tao moi).
+ * Doc labels tu labelsDir, map theo basename, alias map cho truong hop loi chinh ta.
+ * @param {number} visitId - ID visit can gan labels
+ * @param {string} labelsDir - duong dan folder labels
+ * @param {Object} options
+ * @param {Object} options.aliasMap - { 'GTD': 'GCD' } — ten file label bi loi chinh ta -> ten anh thuc
+ * @param {boolean} options.idempotent - true = skip anh da co annotations (default true)
+ * @returns {Promise<Object>} thong ke
+ */
+async function attachYoloLabelsToVisit(visitId, labelsDir, { aliasMap = {}, idempotent = true } = {}) {
+  if (!fs.existsSync(labelsDir) || !fs.statSync(labelsDir).isDirectory()) {
+    throw new Error(`Folder labels khong ton tai: ${labelsDir}`);
+  }
+
+  const client = await pool.connect();
+  const stats = {
+    visitId,
+    images: { total: 0, annotated: 0, skipped: 0, emptyLabel: 0, errors: [] },
+    annotations: { total: 0, teeth: 0, subboxes: 0, imagesWithAnnotations: 0, skippedLines: 0 }
+  };
+
+  try {
+    await client.query('BEGIN');
+
+    const imagesResult = await client.query(
+      `SELECT id, visit_id, original_filename, width, height, has_annotations
+       FROM images WHERE visit_id = $1 ORDER BY image_index, id`,
+      [visitId]
+    );
+    const images = imagesResult.rows;
+    stats.images.total = images.length;
+
+    for (const imageRow of images) {
+      const originalName = path.basename(imageRow.original_filename || '');
+      const baseName = path.parse(originalName).name;
+
+      if (!baseName || baseName.startsWith('.')) {
+        stats.images.skipped++;
+        continue;
+      }
+
+      if (idempotent && imageRow.has_annotations) {
+        stats.images.skipped++;
+        continue;
+      }
+
+      const candidateBaseNames = [baseName, ...(aliasMap[baseName] ? [aliasMap[baseName]] : [])];
+
+      let content = '';
+      let foundLabel = false;
+      for (const candidate of candidateBaseNames) {
+        const labelPath = path.join(labelsDir, `${candidate}.txt`);
+        if (fs.existsSync(labelPath) && fs.statSync(labelPath).isFile()) {
+          const raw = fs.readFileSync(labelPath, 'utf-8');
+          if (raw.trim()) {
+            content = raw;
+            foundLabel = true;
+            break;
+          }
+        }
+      }
+
+      if (!foundLabel || !content.trim()) {
+        stats.images.emptyLabel++;
+        stats.images.skipped++;
+        continue;
+      }
+
+      try {
+        await importAnnotationsForImage(client, imageRow, content, stats);
+        stats.images.annotated++;
+      } catch (err) {
+        stats.images.errors.push(`Loi import label cho ${originalName}: ${err.message}`);
+        stats.images.skipped++;
+      }
     }
 
     await client.query('COMMIT');
@@ -485,6 +590,8 @@ module.exports = {
   parseYoloLabel,
   yoloToPixelBbox,
   toothCategoryName,
+  importAnnotationsForImage,
   importPatientFolder,
+  attachYoloLabelsToVisit,
   importSourcePath
 };

@@ -111,8 +111,6 @@ router.get('/api/images/proxy/*', optionalAuth, async (req, res) => {
     const contentType = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : 
                        ext === 'png' ? 'image/png' : 'image/jpeg';
     
-    res.set('Access-Control-Allow-Origin', process.env.FRONTEND_URL || 'http://localhost:4004');
-    res.set('Access-Control-Allow-Credentials', 'true');
     res.set('Content-Type', contentType);
     res.set('Cache-Control', 'public, max-age=86400, immutable');
     

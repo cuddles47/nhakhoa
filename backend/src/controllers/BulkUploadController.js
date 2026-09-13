@@ -4,6 +4,7 @@ const { uploadFiles } = storage;
 const db = require('../services/database');
 const annotationService = require('../services/annotationService');
 const stainedValidator = require('../services/stainedImageValidator');
+const { getImageDimensions, importAnnotationsForImage } = require('../services/yoloImportService');
 
 class BulkUploadController {
     /**
@@ -17,13 +18,6 @@ class BulkUploadController {
         const client = await pool.connect();
         
         try {
-            // DEBUG-REMOVE: log what arrived so we can root-cause empty image uploads
-            const dbgFiles = (Array.isArray(req.files) ? req.files : []).slice(0, 9).map(f => ({ name: f.originalname, size: f.size, field: f.fieldname }));
-            const dbgLine = `BULK-DEBUG ${new Date().toISOString()} ct=${req.headers['content-type']} reqFiles=${Array.isArray(req.files) ? req.files.length : 0} first=${JSON.stringify(dbgFiles)}`;
-            console.log(dbgLine);
-            try { require('fs').appendFileSync('/tmp/opencode/backend.log', dbgLine + '\n'); } catch (e) {}
-            // END DEBUG-REMOVE
-
             // Parse metadata
             const metadata = JSON.parse(req.body.metadata || '[]');
             
@@ -33,6 +27,7 @@ class BulkUploadController {
             let imageFiles = [];
             let annotationFile = null;
             const archiveFiles = [];
+            let yoloLabelFiles = [];
 
             if (Array.isArray(req.files)) {
                 // upload.any() format - req.files is an array
@@ -43,6 +38,8 @@ class BulkUploadController {
                         annotationFile = file;
                     } else if (file.fieldname === 'archive') {
                         archiveFiles.push(file);
+                    } else if (file.fieldname === 'labels') {
+                        yoloLabelFiles.push(file);
                     }
                 }
             } else if (req.files) {
@@ -51,7 +48,10 @@ class BulkUploadController {
                 const annotationFiles = req.files.annotationFile || [];
                 annotationFile = annotationFiles[0];
                 archiveFiles.push(...(req.files.archive || []));
+                yoloLabelFiles = req.files.labels || [];
             }
+            if (!Array.isArray(yoloLabelFiles)) yoloLabelFiles = [];
+            if (yoloLabelFiles.length > 0) console.log(`YOLO labels detected: ${yoloLabelFiles.length}`);
 
             // Drop macOS metadata/stub files (._* , .DS_Store)
             imageFiles = imageFiles.filter((f) => {
@@ -307,19 +307,23 @@ class BulkUploadController {
                         'lower_right': 7, 'lower_center': 8, 'lower_left': 9
                     };
                     const imageIndex = positionIndexMap[fileInfo.imageInfo.position] || null;
-                    
+
+                    const sourceBuffer = fileInfo.source instanceof Buffer ? fileInfo.source
+                        : (typeof require !== 'undefined' && fileInfo.source ? require('fs').readFileSync(fileInfo.source) : null);
+                    const parsedDims = sourceBuffer ? getImageDimensions(sourceBuffer) : null;
+
                     const imageData = {
                         visit_id: visit.id,
-                        url: uploadResult.url, // VARCHAR(255) - Changed from url_minio to url
-                        original_filename: uploadResult.originalName, // NEW: Store original filename
-                        image_category: fileInfo.imageCategory, // VARCHAR(20)
-                        image_type: fileInfo.imageInfo.position.substring(0, 50), // VARCHAR(50) - truncate
-                        image_index: imageIndex, // Set proper index based on position
-                        validation_status: 'pending', // VARCHAR(20)
-                        notes: `Bulk upload: ${uploadResult.originalName}`, // TEXT - no limit
-                        width: matchedImage ? matchedImage.width : null, // NEW: Store image dimensions
-                        height: matchedImage ? matchedImage.height : null,
-                        has_annotations: false, // Will be updated if annotations found
+                        url: uploadResult.url,
+                        original_filename: uploadResult.originalName,
+                        image_category: fileInfo.imageCategory,
+                        image_type: fileInfo.imageInfo.position.substring(0, 50),
+                        image_index: imageIndex,
+                        validation_status: 'pending',
+                        notes: `Bulk upload: ${uploadResult.originalName}`,
+                        width: (matchedImage && matchedImage.width) || (parsedDims ? parsedDims.width : null),
+                        height: (matchedImage && matchedImage.height) || (parsedDims ? parsedDims.height : null),
+                        has_annotations: false,
                         annotation_count: 0
                     };
 
@@ -359,6 +363,42 @@ class BulkUploadController {
                     } else {
                         // No match found in COCO file
                         imagesWithoutAnnotations.push(uploadResult.originalName);
+                    }
+                }
+
+                // Import YOLO labels (.txt) if provided
+                const visitImages = createdImages.filter(img => img.visit_id === visit.id);
+                if (yoloLabelFiles.length > 0 && visitImages.length > 0) {
+                    const ALIAS_MAP = { 'GTD': 'GCD' };
+                    const posCode = (fname) => {
+                        const base = fname.replace(/\.[^.]+$/, '').split(/[\\/]/).pop();
+                        const m = base.match(/(?:^|[_-])(\d{4})_([A-Za-z]{1,4})$/);
+                        return m ? m[2].toUpperCase() : null;
+                    };
+                    const imgCodeMap = {};
+                    for (const img of visitImages) {
+                        const c = posCode(img.original_filename);
+                        if (c) imgCodeMap[c] = img;
+                    }
+                    const importedImgIds = new Set();
+                    for (const lf of yoloLabelFiles) {
+                        const rawCode = posCode(lf.originalname);
+                        if (!rawCode) continue;
+                        const resolvedCode = ALIAS_MAP[rawCode] || rawCode;
+                        const target = (imgCodeMap[resolvedCode] && !importedImgIds.has(imgCodeMap[resolvedCode].id))
+                            ? imgCodeMap[resolvedCode]
+                            : (imgCodeMap[rawCode] && !importedImgIds.has(imgCodeMap[rawCode].id)
+                                ? imgCodeMap[rawCode] : null);
+                        if (!target) continue;
+                        const content = lf.buffer ? lf.buffer.toString('utf-8') : '';
+                        if (!content.trim()) continue;
+                        const yoloStats = { annotations: { teeth: 0, subboxes: 0, total: 0, imagesWithAnnotations: 0, skippedLines: 0 } };
+                        const count = await importAnnotationsForImage(client, target, content, yoloStats);
+                        if (count > 0) {
+                            annotationsCreated += yoloStats.annotations.total;
+                            importedImgIds.add(target.id);
+                            console.log(`[YOLO] Imported ${lf.originalname} → image ${target.id} (${count} annotations)`);
+                        }
                     }
                 }
             }
