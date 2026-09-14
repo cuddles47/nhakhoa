@@ -4,6 +4,10 @@ const { uploadFiles } = storage;
 const db = require('../services/database');
 const annotationService = require('../services/annotationService');
 const stainedValidator = require('../services/stainedImageValidator');
+const sharp = require('sharp');
+const path = require('path');
+const fs = require('fs');
+const { extractZipToDir, listFilesRecursively, cleanupDir } = require('../utils/zipHandler');
 
 class BulkUploadController {
     /**
@@ -1042,6 +1046,359 @@ class BulkUploadController {
         }
     }
 
+    // ============================================================
+    // YOLO Upload - accepts folder with images/ + labels/ YOLO format
+    // ============================================================
+
+    /**
+     * Bulk upload YOLO format: images + YOLO .txt labels
+     * Accepts multipart/form-data with:
+     * - images[]: array of image files
+     * - yoloLabels[]: array of YOLO .txt files (6-field format)
+     * - metadata: JSON string with upload info
+     *
+     * POST /api/bulk-upload-yolo
+     */
+    async bulkUploadYolo(req, res) {
+        const { pool } = require('../config/database');
+        const client = await pool.connect();
+
+        try {
+            // Parse metadata
+            const metadata = JSON.parse(req.body.metadata || '[]');
+
+            let imageFiles = [];
+            let yoloLabelFiles = [];
+            const archiveFiles = [];
+
+            // Separate files by type
+            if (Array.isArray(req.files)) {
+                for (const file of req.files) {
+                    if (file.fieldname === 'images') {
+                        imageFiles.push(file);
+                    } else if (file.fieldname === 'yoloLabels') {
+                        yoloLabelFiles.push(file);
+                    } else if (file.fieldname === 'archive') {
+                        archiveFiles.push(file);
+                    }
+                }
+            } else if (req.files) {
+                imageFiles = req.files.images || [];
+                yoloLabelFiles = req.files.yoloLabels || [];
+                archiveFiles.push(...(req.files.archive || []));
+            }
+
+            // Handle ZIP archive extraction
+            const archivePath = require('path');
+            let extractedDir = null;
+
+            if (archiveFiles.length > 0) {
+                const archive = archiveFiles[0];
+                const aPath = archive.path || (archive.destination && archive.filename ? archivePath.join(archive.destination, archive.filename) : null);
+                if (!aPath || !fs.existsSync(aPath)) {
+                    return res.status(400).json({ success: false, error: 'Archive not found on disk' });
+                }
+
+                extractedDir = archivePath.join(process.env.UPLOAD_DIR || '/tmp/uploads', `yolo_extract_${Date.now()}`);
+
+                try {
+                    const extracted = await extractZipToDir(aPath, extractedDir);
+
+                    for (const e of extracted) {
+                        const base = path.basename(e.name).toLowerCase();
+                        const ext = path.extname(e.name).toLowerCase();
+
+                        if (ext === '.txt') {
+                            // YOLO label file
+                            try {
+                                const content = fs.readFileSync(e.path);
+                                yoloLabelFiles.push({ originalname: path.basename(e.name), buffer: content });
+                            } catch (err) {
+                                console.warn('Failed to read label file from archive:', err.message);
+                            }
+                        } else if (['.jpg', '.jpeg', '.png'].includes(ext)) {
+                            // Image file
+                            imageFiles.push({ originalname: path.basename(e.name), path: e.path });
+                        }
+                    }
+
+                    console.log(`Extracted ${extracted.length} files from archive to ${extractedDir}`);
+                } catch (err) {
+                    await cleanupDir(extractedDir);
+                    return res.status(400).json({ success: false, error: `Failed to extract archive: ${err.message}` });
+                }
+            }
+
+            // Validation
+            if (!metadata || metadata.length === 0) {
+                return res.status(400).json({ success: false, error: 'No metadata provided' });
+            }
+            if (!imageFiles || imageFiles.length === 0) {
+                return res.status(400).json({ success: false, error: 'No image files uploaded' });
+            }
+            if (!yoloLabelFiles || yoloLabelFiles.length === 0) {
+                return res.status(400).json({ success: false, error: 'No YOLO label files uploaded' });
+            }
+
+            // Build label file map: baseName → buffer
+            const labelFileMap = {};
+            for (const lf of yoloLabelFiles) {
+                const baseName = lf.originalname.replace(/\.txt$/i, '');
+                labelFileMap[baseName] = lf.buffer;
+            }
+
+            // Start transaction
+            await client.query('BEGIN');
+
+            let patientsCreated = 0;
+            let visitsCreated = 0;
+            let imagesCreated = 0;
+            let annotationsCreated = 0;
+            const createdPatients = [];
+            const createdVisits = [];
+            const createdImages = [];
+            const imagesWithoutAnnotations = [];
+
+            // Group images by patient using parseNewFilename
+            const patientGroups = {};
+            for (const file of imageFiles) {
+                const parsed = annotationService.parseNewFilename(file.originalname);
+                if (!parsed) {
+                    console.warn(`[YOLO Upload] Cannot parse filename: ${file.originalname}`);
+                    continue;
+                }
+                if (!patientGroups[parsed.patientId]) {
+                    patientGroups[parsed.patientId] = { images: [], ext: parsed.ext };
+                }
+                patientGroups[parsed.patientId].images.push({ file, parsed });
+            }
+
+            // Process each patient group
+            for (const group of metadata) {
+                const patientId = group.patientId;
+                const patientGroup = patientGroups[patientId];
+
+                if (!patientGroup) {
+                    console.warn(`[YOLO Upload] No images found for patient ${patientId}`);
+                    continue;
+                }
+
+                // 1. Handle patient
+                let patient;
+                if (group.patientMapping) {
+                    if (group.patientMapping.type === 'existing') {
+                        patient = group.patientMapping.patient;
+                    } else if (group.patientMapping.type === 'new') {
+                        patient = await Patient.create({
+                            name: group.patientMapping.patient.name,
+                            phone: group.patientMapping.patient.phone || '',
+                            dob: group.patientMapping.patient.dob || null,
+                            gender: group.patientMapping.patient.gender || 'unknown',
+                            notes: group.patientMapping.patient.notes || `Patient ID: ${patientId}`
+                        });
+                        patientsCreated++;
+                        createdPatients.push(patient);
+                    }
+                } else {
+                    let existingPatient = await Patient.findAll({ search: `ID:${patientId}`, limit: 1 });
+                    if (!existingPatient || existingPatient.data.length === 0) {
+                        patient = await Patient.create({
+                            name: `Bệnh Nhân #${patientId}`,
+                            phone: '',
+                            dob: null,
+                            gender: 'unknown',
+                            notes: `Patient ID: ${patientId}`
+                        });
+                        patientsCreated++;
+                        createdPatients.push(patient);
+                    } else {
+                        patient = existingPatient.data[0];
+                    }
+                }
+
+                // 2. Create visit with system datetime
+                const now = new Date();
+                const visitDate = group.visitDate || now.toISOString().split('T')[0];
+
+                const visit = await Visit.create({
+                    patient_id: patient.id,
+                    visit_date: visitDate,
+                    diagnosis: 'Khám chỉnh nha định kỳ',
+                    notes: `YOLO bulk upload - Patient ID: ${patientId}`,
+                    status: 'completed'
+                });
+                visitsCreated++;
+                createdVisits.push(visit);
+
+                // 3. Process each image with its YOLO label
+                for (const { file, parsed } of patientGroup.images) {
+                    // Match label file
+                    const baseName = file.originalname.replace(/\.(jpg|jpeg|png|JPG|JPEG|PNG)$/i, '');
+                    const matchedLabel = labelFileMap[baseName];
+
+                    if (!matchedLabel) {
+                        console.warn(`[YOLO Upload] No label found for: ${file.originalname}`);
+                        imagesWithoutAnnotations.push(file.originalname);
+                        continue;
+                    }
+
+                    // Get image dimensions
+                    let imageWidth = 0;
+                    let imageHeight = 0;
+                    try {
+                        const imageBuffer = file.buffer || fs.readFileSync(file.path);
+                        const metadata = await sharp(imageBuffer).metadata();
+                        imageWidth = metadata.width || 0;
+                        imageHeight = metadata.height || 0;
+                    } catch (err) {
+                        console.warn(`[YOLO Upload] Cannot read dimensions for ${file.originalname}: ${err.message}`);
+                        // Continue without dimensions - will use default or skip
+                    }
+
+                    // Upload image to MinIO
+                    const imageCategory = parsed.position.includes('raw') ? 'raw' :
+                                         parsed.position.includes('stained') ? 'stained' : 'raw';
+                    const objectName = `visits/${visit.id}/${imageCategory}_${parsed.position}.${parsed.ext}`;
+
+                    let uploadResult;
+                    if (file.buffer) {
+                        uploadResult = await storage.uploadFile(objectName, file.buffer, 'image/jpeg');
+                    } else if (file.path) {
+                        const fileBuffer = fs.readFileSync(file.path);
+                        uploadResult = await storage.uploadFile(objectName, fileBuffer, 'image/jpeg');
+                    }
+
+                    if (!uploadResult || !uploadResult.success) {
+                        console.error(`[YOLO Upload] Failed to upload ${file.originalname}:`, uploadResult?.error);
+                        continue;
+                    }
+
+                    // Create image record
+                    const positionIndexMap = {
+                        'upper_right': 1, 'upper_center': 2, 'upper_left': 3,
+                        'middle_right': 4, 'middle_center': 5, 'middle_left': 6,
+                        'lower_right': 7, 'lower_center': 8, 'lower_left': 9
+                    };
+                    const imageIndex = positionIndexMap[parsed.position] || null;
+
+                    const imageData = {
+                        visit_id: visit.id,
+                        url: uploadResult.url,
+                        original_filename: file.originalname,
+                        image_category: imageCategory,
+                        image_type: parsed.position.substring(0, 50),
+                        image_index: imageIndex,
+                        validation_status: 'pending',
+                        notes: `YOLO upload: ${file.originalname}`,
+                        width: imageWidth,
+                        height: imageHeight,
+                        has_annotations: false,
+                        annotation_count: 0
+                    };
+
+                    const image = await Image.create(imageData);
+                    imagesCreated++;
+                    createdImages.push(image);
+
+                    // Parse YOLO annotations and convert to pixels
+                    const labelContent = matchedLabel.toString('utf-8');
+                    const yoloAnnotations = annotationService.parseYOLOFile(labelContent);
+
+                    if (yoloAnnotations.length > 0 && imageWidth > 0 && imageHeight > 0) {
+                        const pixelAnnotations = annotationService.convertYOLOToPixels(yoloAnnotations, imageWidth, imageHeight);
+
+                        // Store annotations in DB
+                        const annotationsToStore = pixelAnnotations.map(ann => ({
+                            image_id: image.id,
+                            category_id: ann.category_id,
+                            category_name: ann.category_name,
+                            bbox: ann.bbox,
+                            area: ann.area,
+                            plaque_status: ann.plaque_status
+                        }));
+
+                        await annotationService.storeBatchYOLOAnnotations(client, annotationsToStore);
+
+                        // Update image record
+                        await client.query(
+                            'UPDATE images SET has_annotations = true, annotation_count = $1 WHERE id = $2',
+                            [yoloAnnotations.length, image.id]
+                        );
+
+                        annotationsCreated += yoloAnnotations.length;
+                    } else {
+                        imagesWithoutAnnotations.push(file.originalname);
+                    }
+                }
+            }
+
+            // Commit transaction
+            await client.query('COMMIT');
+
+            // Build response
+            const summaryParts = [];
+            if (patientsCreated > 0) summaryParts.push(`${patientsCreated} bệnh nhân mới`);
+            if (visitsCreated > 0) summaryParts.push(`${visitsCreated} lần khám`);
+            if (imagesCreated > 0) summaryParts.push(`${imagesCreated} ảnh`);
+            if (annotationsCreated > 0) summaryParts.push(`${annotationsCreated} annotations`);
+
+            const patientSummary = createdPatients.map((patient, idx) => ({
+                id: patient.id,
+                name: patient.name,
+                patientId: metadata[idx]?.patientId,
+                imagesCount: createdVisits[idx] ?
+                    createdImages.filter(img => img.visit_id === createdVisits[idx].id).length : 0
+            }));
+
+            res.status(201).json({
+                success: true,
+                message: `YOLO Upload thành công: ${summaryParts.join(', ')}`,
+                data: {
+                    patientsCreated,
+                    visitsCreated,
+                    imagesCreated,
+                    annotationsCreated,
+                    imagesWithoutAnnotations: imagesWithoutAnnotations.length > 0 ? imagesWithoutAnnotations : undefined,
+                    patientSummary,
+                    patients: createdPatients,
+                    visits: createdVisits,
+                    images: createdImages
+                }
+            });
+
+        } catch (error) {
+            await client.query('ROLLBACK');
+            console.error('YOLO Bulk upload error:', error);
+
+            let errorMessage = 'YOLO Upload thất bại';
+            if (error.message.includes('annotation')) {
+                errorMessage = `Lỗi xử lý annotations: ${error.message}`;
+            } else if (error.message.includes('patient')) {
+                errorMessage = `Lỗi tạo bệnh nhân: ${error.message}`;
+            } else if (error.message.includes('visit')) {
+                errorMessage = `Lỗi tạo lần khám: ${error.message}`;
+            } else if (error.message.includes('upload') || error.message.includes('storage')) {
+                errorMessage = `Lỗi upload ảnh: ${error.message}`;
+            } else {
+                errorMessage = error.message || 'Lỗi không xác định';
+            }
+
+            res.status(500).json({ success: false, error: errorMessage });
+        } finally {
+            // Cleanup extracted files
+            try {
+                if (typeof extractedDir !== 'undefined' && extractedDir) {
+                    await cleanupDir(extractedDir);
+                    console.log('Cleaned up extracted dir:', extractedDir);
+                }
+            } catch (cleanupErr) {
+                console.warn('Error cleaning up extracted files:', cleanupErr.message);
+            }
+
+            client.release();
+        }
+    }
+
     /**
      * Get available visits for a patient (that have RAW images)
      * GET /api/patients/:patientId/available-visits
@@ -1088,4 +1445,15 @@ class BulkUploadController {
     }
 }
 
-module.exports = new BulkUploadController();
+// Export all methods including YOLO upload
+const controller = new BulkUploadController();
+module.exports = {
+    bulkUpload: controller.bulkUpload.bind(controller),
+    bulkUploadYolo: controller.bulkUploadYolo.bind(controller),
+    getUploadHistory: controller.getUploadHistory.bind(controller),
+    confirmUpload: controller.confirmUpload.bind(controller),
+    generatePresignedUrls: controller.generatePresignedUrls.bind(controller),
+    uploadStainedImages: controller.uploadStainedImages.bind(controller),
+    getStainedUploadStatus: controller.getStainedUploadStatus.bind(controller),
+    getAvailableVisitsForStained: controller.getAvailableVisitsForStained.bind(controller)
+};

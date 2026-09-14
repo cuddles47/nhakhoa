@@ -17,8 +17,14 @@ function Sidebar({ onLogout }) {
       path: '/bulk-upload',
       icon: FiUploadCloud,
       label: 'Bulk upload ảnh raw',
-      description: 'Upload ảnh raw',
+      description: 'Upload ảnh raw (COCO)',
       exact: true
+    },
+    {
+      path: '/bulk-upload-yolo',
+      icon: FiUploadCloud,
+      label: 'Bulk upload YOLO',
+      description: 'Upload ảnh + YOLO annotations'
     },
     {
       path: '/bulk-upload/stained',

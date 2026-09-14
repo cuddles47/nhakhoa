@@ -416,6 +416,71 @@ function BulkUpload() {
     setPatientMappings(newMappings)
   }
 
+  const collectFilesFromDataTransfer = async (dataTransfer) => {
+    try {
+      if (!dataTransfer?.items || dataTransfer.items.length === 0) {
+        return Array.from(dataTransfer?.files || []);
+      }
+
+      const traverseEntry = async (entry) => {
+        if (!entry) return [];
+
+        if (entry.isFile) {
+          return new Promise((resolve, reject) => {
+            entry.file((file) => resolve([file]), reject);
+          });
+        }
+
+        if (entry.isDirectory) {
+          const reader = entry.createReader();
+          const entries = [];
+
+          await new Promise((resolve, reject) => {
+            const readEntries = () => {
+              reader.readEntries((batch) => {
+                if (!batch.length) {
+                  resolve();
+                  return;
+                }
+                entries.push(...batch);
+                readEntries();
+              }, reject);
+            };
+            readEntries();
+          });
+
+          const files = [];
+          for (const child of entries) {
+            const childFiles = await traverseEntry(child);
+            files.push(...childFiles);
+          }
+          return files;
+        }
+
+        return [];
+      };
+
+      const entries = Array.from(dataTransfer.items)
+        .map(item => (item.webkitGetAsEntry ? item.webkitGetAsEntry() : null))
+        .filter(Boolean);
+
+      if (!entries.length) {
+        return Array.from(dataTransfer.files || []);
+      }
+
+      const files = [];
+      for (const entry of entries) {
+        const entryFiles = await traverseEntry(entry);
+        files.push(...entryFiles);
+      }
+
+      return files;
+    } catch (error) {
+      console.error('Không thể đọc folder từ drag & drop, fallback sang FileList:', error);
+      return Array.from(dataTransfer?.files || []);
+    }
+  };
+
   const handleDragEnter = (e) => {
     e.preventDefault()
     e.stopPropagation()
@@ -425,7 +490,9 @@ function BulkUpload() {
   const handleDragLeave = (e) => {
     e.preventDefault()
     e.stopPropagation()
-    setIsDragging(false)
+    if (!e.currentTarget.contains(e.relatedTarget)) {
+      setIsDragging(false)
+    }
   }
 
   const handleDragOver = (e) => {
@@ -433,18 +500,16 @@ function BulkUpload() {
     e.stopPropagation()
   }
 
-  const handleDrop = (e) => {
+  const handleDrop = async (e) => {
     e.preventDefault()
     e.stopPropagation()
     setIsDragging(false)
-    
-    const files = e.dataTransfer.files
-    handleFiles(files)
+    const filesFromDrop = await collectFilesFromDataTransfer(e.dataTransfer)
+    handleFiles(filesFromDrop)
   }
 
   const handleFileSelect = (e) => {
-    const files = e.target.files
-    handleFiles(files)
+    handleFiles(e.target.files)
   }
 
   const handleAnnotationFileClear = () => {

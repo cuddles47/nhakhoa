@@ -70,9 +70,12 @@ router.put('/api/images/:id/validation', validate(imageSchemas.updateValidation)
 router.post('/api/images/:id/rotate', upload.single('image'), imageController.rotateImage);
 router.delete('/api/images/:id', imageController.deleteImage);
 
-// Bulk upload routes
+// Bulk upload routes (COCO format - legacy)
 router.post('/api/bulk-upload', upload.any(), bulkUploadController.bulkUpload);
 router.get('/api/bulk-upload/history', bulkUploadController.getUploadHistory);
+
+// Bulk upload routes (YOLO format - new)
+router.post('/api/bulk-upload-yolo', upload.any(), bulkUploadController.bulkUploadYolo);
 
 // Stained bulk upload routes
 router.post('/api/bulk-upload/stained', upload.array('images', 20), bulkUploadController.uploadStainedImages);
