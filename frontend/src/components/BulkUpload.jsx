@@ -75,15 +75,15 @@ function BulkUpload() {
       .replace(/[-_\s]/g, '')
     
     const positionMap = {
-      'upper_right': ['upperright', 'topright', 'trenphai'],
-      'upper_center': ['uppercenter', 'uppermiddle', 'topcenter', 'topmiddle', 'trengiua'],
-      'upper_left': ['upperleft', 'topleft', 'trentrai'],
-      'middle_right': ['middleright', 'centralright', 'centerright', 'giuaphai'],
-      'middle_center': ['middlecenter', 'middlemiddle', 'centralcenter', 'centralmiddle', 'center', 'giua'],
-      'middle_left': ['middleleft', 'centralleft', 'centerleft', 'giuatrai'],
-      'lower_right': ['lowerright', 'bottomright', 'duoiphai'],
-      'lower_center': ['lowercenter', 'lowermiddle', 'bottomcenter', 'bottommiddle', 'duoigiua'],
-      'lower_left': ['lowerleft', 'bottomleft', 'duoitrai']
+      'upper_right': ['upperright', 'topright', 'trenphai', 'PCT'],
+      'upper_center': ['uppercenter', 'uppermiddle', 'topcenter', 'topmiddle', 'trengiua', 'GCT'],
+      'upper_left': ['upperleft', 'topleft', 'trentrai', 'TCT'],
+      'middle_right': ['middleright', 'centralright', 'centerright', 'giuaphai', 'P'],
+      'middle_center': ['middlecenter', 'middlemiddle', 'centralcenter', 'centralmiddle', 'center', 'giua', 'G'],
+      'middle_left': ['middleleft', 'centralleft', 'centerleft', 'giuatrai', 'T'],
+      'lower_right': ['lowerright', 'bottomright', 'duoiphai', 'PCD'],
+      'lower_center': ['lowercenter', 'lowermiddle', 'bottomcenter', 'bottommiddle', 'duoigiua', 'GCD'],
+      'lower_left': ['lowerleft', 'bottomleft', 'duoitrai', 'TCD']
     }
     
     for (const [standardType, variants] of Object.entries(positionMap)) {
@@ -416,6 +416,71 @@ function BulkUpload() {
     setPatientMappings(newMappings)
   }
 
+  const collectFilesFromDataTransfer = async (dataTransfer) => {
+    try {
+      if (!dataTransfer?.items || dataTransfer.items.length === 0) {
+        return Array.from(dataTransfer?.files || []);
+      }
+
+      const traverseEntry = async (entry) => {
+        if (!entry) return [];
+
+        if (entry.isFile) {
+          return new Promise((resolve, reject) => {
+            entry.file((file) => resolve([file]), reject);
+          });
+        }
+
+        if (entry.isDirectory) {
+          const reader = entry.createReader();
+          const entries = [];
+
+          await new Promise((resolve, reject) => {
+            const readEntries = () => {
+              reader.readEntries((batch) => {
+                if (!batch.length) {
+                  resolve();
+                  return;
+                }
+                entries.push(...batch);
+                readEntries();
+              }, reject);
+            };
+            readEntries();
+          });
+
+          const files = [];
+          for (const child of entries) {
+            const childFiles = await traverseEntry(child);
+            files.push(...childFiles);
+          }
+          return files;
+        }
+
+        return [];
+      };
+
+      const entries = Array.from(dataTransfer.items)
+        .map(item => (item.webkitGetAsEntry ? item.webkitGetAsEntry() : null))
+        .filter(Boolean);
+
+      if (!entries.length) {
+        return Array.from(dataTransfer.files || []);
+      }
+
+      const files = [];
+      for (const entry of entries) {
+        const entryFiles = await traverseEntry(entry);
+        files.push(...entryFiles);
+      }
+
+      return files;
+    } catch (error) {
+      console.error('Không thể đọc folder từ drag & drop, fallback sang FileList:', error);
+      return Array.from(dataTransfer?.files || []);
+    }
+  };
+
   const handleDragEnter = (e) => {
     e.preventDefault()
     e.stopPropagation()
@@ -425,7 +490,9 @@ function BulkUpload() {
   const handleDragLeave = (e) => {
     e.preventDefault()
     e.stopPropagation()
-    setIsDragging(false)
+    if (!e.currentTarget.contains(e.relatedTarget)) {
+      setIsDragging(false)
+    }
   }
 
   const handleDragOver = (e) => {
@@ -433,18 +500,16 @@ function BulkUpload() {
     e.stopPropagation()
   }
 
-  const handleDrop = (e) => {
+  const handleDrop = async (e) => {
     e.preventDefault()
     e.stopPropagation()
     setIsDragging(false)
-    
-    const files = e.dataTransfer.files
-    handleFiles(files)
+    const filesFromDrop = await collectFilesFromDataTransfer(e.dataTransfer)
+    handleFiles(filesFromDrop)
   }
 
   const handleFileSelect = (e) => {
-    const files = e.target.files
-    handleFiles(files)
+    handleFiles(e.target.files)
   }
 
   const handleAnnotationFileClear = () => {
@@ -1115,14 +1180,14 @@ function BulkUpload() {
               <button
                 className="button"
                 onClick={handleUpload}
-                disabled={uploading || Object.keys(patientMappings).length < parsedData.length}
+                disabled={uploading}
                 style={{ 
                   flex: 1, 
                   padding: '14px', 
                   fontSize: '15px',
                   fontWeight: '600',
-                  opacity: (uploading || Object.keys(patientMappings).length < parsedData.length) ? 0.5 : 1,
-                  cursor: (uploading || Object.keys(patientMappings).length < parsedData.length) ? 'not-allowed' : 'pointer'
+                  opacity: uploading ? 0.5 : 1,
+                  cursor: uploading ? 'not-allowed' : 'pointer'
                 }}
               >
                 {uploading ? `⏳ Đang xử lý... ${uploadProgress}%` : `🚀 Xác nhận và Upload ${parsedData.length} nhóm`}

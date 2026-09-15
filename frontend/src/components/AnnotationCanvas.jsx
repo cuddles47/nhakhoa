@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 
 const AnnotationCanvas = ({ 
   imageUrl, 
@@ -9,6 +9,8 @@ const AnnotationCanvas = ({
 }) => {
   const canvasRef = useRef(null);
   const imageRef = useRef(null);
+  const hoveredRef = useRef(null);
+  const rafRef = useRef(null);
   const [hoveredSubbox, setHoveredSubbox] = useState(null);
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -25,12 +27,19 @@ const AnnotationCanvas = ({
     img.onerror = () => {};
   }, [imageUrl]);
   
-  // Redraw canvas when teeth or hover state changes
+  // Redraw canvas when teeth data changes
   useEffect(() => {
     if (imageRef.current) {
       drawCanvas();
     }
-  }, [teeth, hoveredSubbox]);
+  }, [teeth]);
+
+  // Redraw canvas on hover change (lightweight - just overlay update)
+  useEffect(() => {
+    if (imageRef.current) {
+      drawCanvas();
+    }
+  }, [hoveredSubbox]);
 
   const drawCanvas = () => {
     const canvas = canvasRef.current;
@@ -74,7 +83,7 @@ const AnnotationCanvas = ({
         tooth.subboxes.forEach((subbox) => {
           const box = subbox.bbox;
           if (!Array.isArray(box) || box.length !== 4) return;
-          const isHovered = hoveredSubbox?.subbox_id === subbox.subbox_id;
+          const isHovered = hoveredRef.current?.subbox_id === subbox.subbox_id;
           // Determine color based on plaque status (always 0 or 1 after processing)
           let fillColor, strokeColor;
           if (subbox.plaque_status === 1) {
@@ -143,16 +152,29 @@ const AnnotationCanvas = ({
     return null;
   };
 
-  const handleMouseMove = (e) => {
+  const handleMouseMove = useCallback((e) => {
     const coords = getCanvasCoordinates(e);
     if (!coords) return;
     
     const result = findSubboxAtPoint(coords.x, coords.y);
-    setHoveredSubbox(result?.subbox || null);
+    const newHovered = result?.subbox || null;
+    
+    // Only update if changed
+    if (newHovered === hoveredRef.current) {
+      e.target.style.cursor = result ? 'pointer' : 'default';
+      return;
+    }
+    hoveredRef.current = newHovered;
     
     // Change cursor
     e.target.style.cursor = result ? 'pointer' : 'default';
-  };
+    
+    // Throttle canvas redraw with requestAnimationFrame
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(() => {
+      setHoveredSubbox(newHovered);
+    });
+  }, [teeth]);
 
   const handleClick = (e) => {
     e.stopPropagation(); // Prevent closing lightbox
@@ -212,8 +234,29 @@ const AnnotationCanvas = ({
         Canvas: {canvasRef.current ? `${canvasRef.current.width}x${canvasRef.current.height}` : 'Not mounted'} | 
         Image: {imageRef.current ? `${imageRef.current.width}x${imageRef.current.height}` : 'Not loaded'} | 
         Teeth: {teeth.length} | 
+        Subboxes: {teeth.reduce((sum, t) => sum + (t.subboxes?.length || 0), 0)} | 
         Handler: {onSubboxClick ? 'OK' : 'Missing'}
       </div>
+
+      {/* No subboxes warning */}
+      {teeth.length > 0 && teeth.every(t => !t.subboxes || t.subboxes.length === 0) && (
+        <div style={{
+          position: 'absolute',
+          top: '50px',
+          left: '10px',
+          background: 'rgba(255, 193, 7, 0.9)',
+          color: '#000',
+          padding: '8px 12px',
+          borderRadius: '4px',
+          fontSize: '12px',
+          fontWeight: '500',
+          pointerEvents: 'none',
+          zIndex: 1000,
+          maxWidth: '250px'
+        }}>
+          ⚠️ Chưa có subbox annotations. Hãy chạy image processing để tạo subboxes.
+        </div>
+      )}
       
       {/* Tooltip */}
       {hoveredSubbox && (

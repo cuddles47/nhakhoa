@@ -397,6 +397,354 @@ function validateYOLOCoordinates(yoloCoords) {
   );
 }
 
+// ============================================================
+// YOLO Upload Support Functions
+// ============================================================
+
+/**
+ * Position mapping cho format filename mới: Patient_add_XXXX_position_jpg
+ */
+const POSITION_MAP = {
+  'upper_right':  ['upperright', 'topright', 'trenphai', 'PCT'],
+  'upper_center': ['uppercenter', 'uppermiddle', 'topcenter', 'topmiddle', 'trengiua', 'GCT'],
+  'upper_left':   ['upperleft', 'topleft', 'trentrai', 'TCT'],
+  'middle_right': ['middleright', 'centralright', 'centerright', 'giuaphai', 'P'],
+  'middle_center':['middlecenter', 'middlemiddle', 'centralcenter', 'centralmiddle', 'center', 'giua', 'G'],
+  'middle_left':  ['middleleft', 'centralleft', 'centerleft', 'giuatrai', 'T'],
+  'lower_right':  ['lowerright', 'bottomright', 'duoiphai', 'PCD'],
+  'lower_center': ['lowercenter', 'lowermiddle', 'bottomcenter', 'bottommiddle', 'duoigiua', 'GCD'],
+  'lower_left':   ['lowerleft', 'bottomleft', 'duoitrai', 'TCD']
+};
+
+/**
+ * Reverse position map: variant → standard position
+ */
+const REVERSE_POSITION_MAP = {};
+for (const [standard, variants] of Object.entries(POSITION_MAP)) {
+  for (const v of variants) {
+    REVERSE_POSITION_MAP[v.toLowerCase()] = standard;
+  }
+}
+
+/**
+ * Parse filename format mới: Patient_add_XXXX_position_jpg hoặc Patient_XXXX_position.jpg
+ * Bỏ qua tiền tố "add_", lấy system datetime
+ * @param {string} filename - Tên file ảnh
+ * @returns {Object|null} - { patientId, position, ext } hoặc null
+ */
+function parseNewFilename(filename) {
+  // Pattern: Patient_XXXX_position.ext (with or without "add_")
+  // Match: Patient_add_0001_G.jpg → patientId=0001, position=G, ext=jpg
+  const match = filename.match(/Patient_(?:add_)?(\d+)_(\w+)\.(jpg|jpeg|png|JPG|JPEG|PNG)$/i);
+  if (!match) return null;
+
+  const [, patientId, positionCode, ext] = match;
+
+  // Resolve position from map
+  const position = REVERSE_POSITION_MAP[positionCode.toLowerCase()] || positionCode;
+
+  return {
+    patientId,
+    position,
+    positionCode,
+    ext: ext.toLowerCase()
+  };
+}
+
+/**
+ * Parse YOLO annotation file content (5-field hoặc 6-field)
+ * 5-field: class_id x_center y_center width height
+ * 6-field: class_id x_center y_center width height tooth_id
+ * @param {string} content - Nội dung file .txt YOLO
+ * @returns {Array} - Array of { class_id, x_center, y_center, width, height, tooth_id|null }
+ */
+function parseYOLOFile(content) {
+  const lines = content.trim().split('\n').filter(line => line.trim());
+  const annotations = [];
+
+  for (const line of lines) {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length < 5) continue;
+
+    const classId = parseInt(parts[0]);
+    const xCenter = parseFloat(parts[1]);
+    const yCenter = parseFloat(parts[2]);
+    const width = parseFloat(parts[3]);
+    const height = parseFloat(parts[4]);
+    const toothId = parts.length >= 6 ? parseInt(parts[5]) : null;
+
+    annotations.push({
+      class_id: classId,
+      x_center: xCenter,
+      y_center: yCenter,
+      width,
+      height,
+      tooth_id: isNaN(toothId) ? null : toothId,
+      _raw_parts: parts.length
+    });
+  }
+
+  console.log(`[parseYOLOFile] Parsed ${annotations.length} annotations, sample:`, JSON.stringify(annotations.slice(0, 3)));
+  return annotations;
+}
+
+/**
+ * Convert YOLO normalized coordinates sang pixel coordinates
+ *
+ * YOLO 6-field format: class_id x_center y_center width height tooth_id
+ * - class_id: 0=no_plaque, 1=has_plaque (plaque status)
+ * - tooth_id: tooth class (1-20 = teeth, 21 = brace)
+ *
+ * DB mapping:
+ * - category_id = tooth_id (tooth class)
+ * - category_name = tooth name (11-45 or "brace")
+ * - plaque_status = class_id (0 or 1)
+ *
+ * @param {Array} yoloAnnotations - Array of { class_id, x_center, y_center, width, height, tooth_id }
+ * @param {number} imageWidth - Width ảnh (pixels)
+ * @param {number} imageHeight - Height ảnh (pixels)
+ * @returns {Array} - Array of { category_id, category_name, bbox, area, plaque_status }
+ */
+function convertYOLOToPixels(yoloAnnotations, imageWidth, imageHeight) {
+  return yoloAnnotations.map(ann => {
+    const x_center_px = ann.x_center * imageWidth;
+    const y_center_px = ann.y_center * imageHeight;
+    const w_px = ann.width * imageWidth;
+    const h_px = ann.height * imageHeight;
+
+    // Convert center → top-left (COCO-style pixel bbox)
+    const x = Math.round(x_center_px - w_px / 2);
+    const y = Math.round(y_center_px - h_px / 2);
+    const w = Math.round(w_px);
+    const h = Math.round(h_px);
+
+    // tooth_id is the actual tooth class (1-20, 21=brace)
+    const toothClassId = ann.tooth_id != null && ann.tooth_id > 0 ? ann.tooth_id : ann.class_id;
+
+    return {
+      category_id: toothClassId,
+      category_name: getCategoryName(toothClassId),
+      bbox: [x, y, w, h],
+      area: w * h,
+      plaque_status: ann.class_id === 0 ? 1 : 0, // Default=has_plaque (red), invert YOLO class_id
+      tooth_id: ann.tooth_id != null && ann.tooth_id > 0 ? ann.tooth_id : null // null=parent teeth, >0=subbox of that tooth
+    };
+  });
+}
+
+/**
+ * Map YOLO class_id sang category name
+ * Teeth 1-20 → tên răng (11-45)
+ * Class 21 → brace
+ */
+const YOLO_CLASS_NAMES = {
+  1: '11', 2: '12', 3: '13', 4: '14',
+  5: '21', 6: '22', 7: '23', 8: '24',
+  9: '31', 10: '32', 11: '33', 12: '34',
+  13: '41', 14: '42', 15: '43', 16: '44',
+  17: '15', 18: '25', 19: '35', 20: '45',
+  21: 'brace'
+};
+
+function getCategoryName(classId) {
+  return YOLO_CLASS_NAMES[classId] || `class_${classId}`;
+}
+
+/**
+ * Match ảnh với label file trong YOLO upload
+ * @param {string} imageFilename - Tên file ảnh (patient_add_0001_G.jpg)
+ * @param {Object} labelFileMap - Map baseName → label file content { 'patient_add_0001_G': Buffer }
+ * @returns {Object|null} - { baseName, labelContent } hoặc null
+ */
+function matchImageToLabel(imageFilename, labelFileMap) {
+  // Remove extension to get base name
+  const baseName = imageFilename.replace(/\.(jpg|jpeg|png|JPG|JPEG|PNG)$/i, '');
+
+  // Exact match
+  if (labelFileMap[baseName]) {
+    return { baseName, labelContent: labelFileMap[baseName] };
+  }
+
+  // Case-insensitive match
+  const lowerBase = baseName.toLowerCase();
+  for (const [key, value] of Object.entries(labelFileMap)) {
+    if (key.toLowerCase() === lowerBase) {
+      return { baseName: key, labelContent: value };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Parse YOLO files và group theo patient ID
+ * @param {Array} yoloFiles - Array of { originalname, buffer }
+ * @returns {Object} - { '0001': { labels: { 'patient_add_0001_G': Buffer, ... }, positionMap: {...} } }
+ */
+function parseYOLOFilesByPatient(yoloFiles) {
+  const byPatient = {};
+
+  for (const file of yoloFiles) {
+    const parsed = parseNewFilename(file.originalname);
+    if (!parsed) {
+      console.warn(`[YOLO] Cannot parse filename: ${file.originalname}`);
+      continue;
+    }
+
+    const { patientId, position, ext } = parsed;
+
+    if (!byPatient[patientId]) {
+      byPatient[patientId] = { labels: {}, images: {} };
+    }
+
+    // Store with base name (without extension) as key for matching
+    const baseName = file.originalname.replace(/\.(txt|jpg|jpeg|png)$/i, '');
+
+    if (ext === 'txt') {
+      byPatient[patientId].labels[baseName] = file.buffer;
+    } else {
+      byPatient[patientId].images[baseName] = file;
+    }
+  }
+
+  return byPatient;
+}
+
+/**
+ * Store batch YOLO annotations vào database
+ * Hỗ trợ 6-field YOLO format: parent teeth (5-field) và subboxes (6-field)
+ *
+ * @param {Object} client - PostgreSQL client (trong transaction)
+ * @param {Array} annotations - Array of { image_id, category_id, category_name, bbox, area, plaque_status, tooth_id }
+ * @returns {Array} - Array of inserted records
+ */
+async function storeBatchYOLOAnnotations(client, annotations) {
+  const results = [];
+
+  const parentInsertQuery = `
+    INSERT INTO image_annotations
+      (image_id, coco_image_id, category_id, category_name, bbox, area, source_type, plaque_status)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    RETURNING id, category_id
+  `;
+
+  const subboxInsertQuery = `
+    INSERT INTO image_annotations
+      (image_id, coco_image_id, category_id, category_name, bbox, area,
+       source_type, parent_annotation_id, subbox_region, plaque_status, predicted_plaque)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    RETURNING *
+  `;
+
+  const regionNames = ['top_left', 'top_right', 'bottom_left', 'bottom_right'];
+
+  // Separate parents (5-field, tooth_id=null) and subboxes (6-field, tooth_id!=null)
+  const parentAnnotations = annotations.filter(a => a.tooth_id == null);
+  const subboxAnnotations = annotations.filter(a => a.tooth_id != null);
+
+  console.log(`[storeBatchYOLOAnnotations] Total: ${annotations.length}, parents(5-field): ${parentAnnotations.length}, subboxes(6-field): ${subboxAnnotations.length}`);
+
+  // parentMapping: tooth_id (number) → inserted parent annotation id
+  const parentMapping = {};
+
+  // Phase 1a: Insert explicit parent teeth (from 5-field lines)
+  for (const ann of parentAnnotations) {
+    const result = await client.query(parentInsertQuery, [
+      ann.image_id,
+      ann.image_id,
+      ann.category_id,
+      ann.category_name,
+      JSON.stringify(ann.bbox),
+      ann.area,
+      'yolo_upload',
+      ann.plaque_status != null ? ann.plaque_status : null
+    ]);
+    const inserted = result.rows[0];
+    parentMapping[Number(inserted.category_id)] = inserted.id;
+    results.push(inserted);
+  }
+
+  // Phase 1b: Auto-create parent teeth from subboxes when no explicit parents exist
+  // Group subboxes by tooth_id
+  const subboxGroups = {};
+  for (const ann of subboxAnnotations) {
+    const tid = Number(ann.tooth_id);
+    if (!subboxGroups[tid]) subboxGroups[tid] = [];
+    subboxGroups[tid].push(ann);
+  }
+
+  for (const [toothIdStr, group] of Object.entries(subboxGroups)) {
+    const toothId = Number(toothIdStr);
+    if (parentMapping[toothId]) continue;
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const ann of group) {
+      const [x, y, w, h] = ann.bbox;
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x + w);
+      maxY = Math.max(maxY, y + h);
+    }
+    const parentBbox = [minX, minY, maxX - minX, maxY - minY];
+    const parentArea = (maxX - minX) * (maxY - minY);
+
+    const firstSubbox = group[0];
+    const parentCategoryId = toothId;
+    const parentCategoryName = getCategoryName(parentCategoryId);
+
+    const result = await client.query(parentInsertQuery, [
+      firstSubbox.image_id,
+      firstSubbox.image_id,
+      parentCategoryId,
+      parentCategoryName,
+      JSON.stringify(parentBbox),
+      parentArea,
+      'yolo_upload',
+      null
+    ]);
+    const inserted = result.rows[0];
+    parentMapping[toothId] = inserted.id;
+    results.push(inserted);
+    console.log(`[storeBatchYOLOAnnotations] Created parent: tooth_id=${toothId}, name=${parentCategoryName}, db_id=${inserted.id}, subboxes=${group.length}`);
+  }
+
+  console.log(`[storeBatchYOLOAnnotations] Parent mapping:`, JSON.stringify(parentMapping));
+
+  // Phase 2: Insert subboxes with parent_annotation_id
+  const regionCounters = {};
+
+  for (const ann of subboxAnnotations) {
+    const tid = Number(ann.tooth_id);
+    const parentId = parentMapping[tid];
+    if (!parentId) {
+      console.warn(`[storeBatchYOLOAnnotations] SKIP subbox: no parent for tooth_id=${tid}, image_id=${ann.image_id}`);
+      continue;
+    }
+
+    if (!(tid in regionCounters)) regionCounters[tid] = 0;
+    const region = regionNames[regionCounters[tid] % 4];
+    regionCounters[tid]++;
+
+    const result = await client.query(subboxInsertQuery, [
+      ann.image_id,
+      ann.image_id,
+      tid, // category_id = tooth class
+      region,
+      JSON.stringify(ann.bbox),
+      ann.area,
+      'yolo_upload',
+      parentId,
+      region,
+      ann.plaque_status != null ? ann.plaque_status : null,
+      ann.plaque_status != null ? ann.plaque_status : null
+    ]);
+    results.push(result.rows[0]);
+  }
+
+  console.log(`[storeBatchYOLOAnnotations] Done: inserted ${results.length} rows`);
+  return results;
+}
+
 module.exports = {
   splitCOCOByPatient,
   parseCOCOFile,
@@ -409,5 +757,14 @@ module.exports = {
   convertBboxToYOLOFormat,
   convertSubboxesToYOLO,
   formatYOLOSubboxText,
-  validateYOLOCoordinates
+  validateYOLOCoordinates,
+  // YOLO upload functions
+  POSITION_MAP,
+  REVERSE_POSITION_MAP,
+  parseNewFilename,
+  parseYOLOFile,
+  convertYOLOToPixels,
+  matchImageToLabel,
+  parseYOLOFilesByPatient,
+  storeBatchYOLOAnnotations
 };

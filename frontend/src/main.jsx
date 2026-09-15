@@ -7,19 +7,17 @@ import { AuthProvider } from './features/auth/hooks/useAuth'
 import ErrorBoundary from './components/ErrorBoundary'
 import './index.css'
 
-// Clear any corrupt state on mount
-try {
-  const testKey = '__test__'
-  localStorage.setItem(testKey, testKey)
-  localStorage.removeItem(testKey)
-} catch (e) {
-  console.warn('localStorage not available, clearing...')
-  localStorage.clear()
-}
 
-// Temporarily disable StrictMode to prevent double useEffect calls
-// StrictMode causes components to mount twice in development which triggers infinite loops
-const queryClient = new QueryClient();
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: false,
+      refetchOnWindowFocus: false,
+      staleTime: 5 * 60 * 1000,
+    },
+  },
+});
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <ErrorBoundary>

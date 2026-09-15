@@ -7,6 +7,7 @@ import PatientForm from './components/PatientForm'
 import VisitManager from './components/VisitManager'
 import ImageUpload from './components/ImageUpload'
 import BulkUpload from './components/BulkUpload'
+import BulkUploadYolo from './components/BulkUploadYolo'
 import StainedBulkUpload from './components/StainedBulkUpload'
 import DatasetExport from './components/DatasetExport'
 
@@ -39,6 +40,7 @@ function App() {
             <Route path="/patients/:patientId/visits" element={<VisitManager />} />
             <Route path="/visits/:visitId/images" element={<ImageUpload />} />
             <Route path="/bulk-upload" element={<BulkUpload />} />
+            <Route path="/bulk-upload-yolo" element={<BulkUploadYolo />} />
             <Route path="/bulk-upload/stained" element={<StainedBulkUpload />} />
             <Route path="/export" element={<DatasetExport />} />
             <Route path="*" element={<NotFound />} />

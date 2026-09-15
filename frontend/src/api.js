@@ -87,6 +87,15 @@ export const bulkUploadImages = (formData, onUploadProgress) => {
     onUploadProgress: onUploadProgress,
   });
 };
+export const bulkUploadYoloImages = (formData, onUploadProgress) => {
+  return api.post('/bulk-upload-yolo', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+    timeout: 600000,
+    onUploadProgress: onUploadProgress,
+  });
+};
 export const getBulkUploadHistory = () => api.get('/bulk-upload/history');
 
 // Presigned + confirm flows for direct-to-MinIO folder uploads
