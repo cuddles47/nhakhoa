@@ -241,25 +241,42 @@ const ProcessedImageViewer = ({
       return;
     }
 
+    const newStatus = subbox.plaque_status === 1 ? 0 : 1;
+
+    // Optimistic update: immediately update local state for instant UI feedback
+    setAnnotations(prev => prev.map(t => {
+      if (t.tooth_id !== tooth.tooth_id) return t;
+      return {
+        ...t,
+        subboxes: t.subboxes.map(sb => {
+          if (sb.subbox_id !== subbox.subbox_id) return sb;
+          return { ...sb, plaque_status: newStatus };
+        })
+      };
+    }));
+
+    toast.success(newStatus === 1 ? '🔴 Có mảng bám' : '🟢 Không có mảng bám', { duration: 1500 });
+
     try {
-      // Toggle: flip between 0 and 1 (no plaque <-> has plaque)
-      const newStatus = subbox.plaque_status === 1 ? 0 : 1;
-      
       await annotationService.updatePlaqueStatus(
-        subbox.subbox_id, 
-        newStatus, 
+        subbox.subbox_id,
+        newStatus,
         currentUser.id
       );
-
-      toast.success(newStatus === 1 ? '🔴 Có mảng bám' : '🟢 Không có mảng bám');
-      
-      // Reload annotations to reflect change
-      if (lightboxImage?.imageId) {
-        await loadAnnotationsForImage(lightboxImage.imageId);
-      }
     } catch (err) {
-      console.error('❌ Failed to update plaque status:', err);
-      alert('Có lỗi xảy ra khi cập nhật: ' + err.message);
+      console.error('Failed to update plaque status:', err);
+      toast.error('Có lỗi xảy ra, đang khôi phục...');
+      // Revert optimistic update on failure
+      setAnnotations(prev => prev.map(t => {
+        if (t.tooth_id !== tooth.tooth_id) return t;
+        return {
+          ...t,
+          subboxes: t.subboxes.map(sb => {
+            if (sb.subbox_id !== subbox.subbox_id) return sb;
+            return { ...sb, plaque_status: subbox.plaque_status };
+          })
+        };
+      }));
     }
   };
 

@@ -1302,10 +1302,14 @@ class BulkUploadController {
 
                     // Parse YOLO annotations and convert to pixels
                     const labelContent = matchedLabel.toString('utf-8');
+                    console.log(`[YOLO Upload] Raw label for ${file.originalname}:\n${labelContent.split('\n').slice(0, 5).join('\n')}`);
                     const yoloAnnotations = annotationService.parseYOLOFile(labelContent);
 
                     if (yoloAnnotations.length > 0 && imageWidth > 0 && imageHeight > 0) {
                         const pixelAnnotations = annotationService.convertYOLOToPixels(yoloAnnotations, imageWidth, imageHeight);
+
+                        console.log(`[YOLO Upload] image=${file.originalname}, yoloCount=${yoloAnnotations.length}, pixelCount=${pixelAnnotations.length}`);
+                        console.log(`[YOLO Upload] sample:`, JSON.stringify(pixelAnnotations.slice(0, 3)));
 
                         // Store annotations in DB
                         const annotationsToStore = pixelAnnotations.map(ann => ({
@@ -1315,7 +1319,7 @@ class BulkUploadController {
                             bbox: ann.bbox,
                             area: ann.area,
                             plaque_status: ann.plaque_status,
-                            tooth_id: ann.tooth_id || null
+                            tooth_id: ann.tooth_id
                         }));
 
                         await annotationService.storeBatchYOLOAnnotations(client, annotationsToStore);

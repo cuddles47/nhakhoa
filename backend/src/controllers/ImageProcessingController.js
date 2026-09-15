@@ -279,11 +279,12 @@ class ImageProcessingController {
     const pool = require('../config/database');
     const lines = annotationContent.trim().split('\n').filter(line => line.trim());
     
-    // Delete all existing subboxes for this image before creating new ones
+    // Delete only Python-created subboxes for this image, preserve YOLO-uploaded subboxes
     await pool.query(`
       DELETE FROM image_annotations 
       WHERE image_id = $1 
         AND parent_annotation_id IS NOT NULL
+        AND (source_type IS NULL OR source_type != 'yolo_upload')
     `, [imageId]);
     
     if (!processedWidth || !processedHeight || processedWidth === 0 || processedHeight === 0) {
@@ -352,12 +353,20 @@ class ImageProcessingController {
     }
     
     // Map: YOLO tooth CLASS ID (as produced by Python service) → DB tooth id
-    // Note: Python uses the original tooth class as `tooth_id` field in 6-field format.
+    // Use category_id directly instead of index-based matching
     const toothClassIdMap = {};
-    for (let i = 0; i < Math.min(teeth.length, dbTeeth.length); i++) {
-      const cls = teeth[i].classId;
-      toothClassIdMap[cls] = dbTeeth[i].id;
+    for (const dbTooth of dbTeeth) {
+      toothClassIdMap[dbTooth.category_id] = dbTooth.id;
     }
+    
+    // Also map from Python's 5-field lines (teeth) as fallback
+    for (const t of teeth) {
+      if (!toothClassIdMap[t.classId]) {
+        toothClassIdMap[t.classId] = dbTeeth.find(db => db.category_id === t.classId)?.id;
+      }
+    }
+    
+    console.log(`[_parseAndSaveSubboxes] imageId=${imageId}, dbTeeth=${dbTeeth.length}, pythonTeeth=${teeth.length}, subboxes=${subboxes.length}, toothClassIdMap=`, JSON.stringify(toothClassIdMap));
     
     // For diagnostics, show expected subbox counts per tooth (from annotations)
     const expectedSubboxCounts = {};

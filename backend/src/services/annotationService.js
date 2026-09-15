@@ -479,10 +479,12 @@ function parseYOLOFile(content) {
       y_center: yCenter,
       width,
       height,
-      tooth_id: isNaN(toothId) ? null : toothId
+      tooth_id: isNaN(toothId) ? null : toothId,
+      _raw_parts: parts.length
     });
   }
 
+  console.log(`[parseYOLOFile] Parsed ${annotations.length} annotations, sample:`, JSON.stringify(annotations.slice(0, 3)));
   return annotations;
 }
 
@@ -517,7 +519,7 @@ function convertYOLOToPixels(yoloAnnotations, imageWidth, imageHeight) {
     const h = Math.round(h_px);
 
     // tooth_id is the actual tooth class (1-20, 21=brace)
-    const toothClassId = ann.tooth_id || ann.class_id;
+    const toothClassId = ann.tooth_id != null && ann.tooth_id > 0 ? ann.tooth_id : ann.class_id;
 
     return {
       category_id: toothClassId,
@@ -525,7 +527,7 @@ function convertYOLOToPixels(yoloAnnotations, imageWidth, imageHeight) {
       bbox: [x, y, w, h],
       area: w * h,
       plaque_status: ann.class_id, // 0=no_plaque, 1=has_plaque
-      tooth_id: ann.tooth_id || null // 6th field: parent tooth class for subboxes
+      tooth_id: ann.tooth_id != null && ann.tooth_id > 0 ? ann.tooth_id : null // null=parent teeth, >0=subbox of that tooth
     };
   });
 }
@@ -611,11 +613,6 @@ function parseYOLOFilesByPatient(yoloFiles) {
 /**
  * Store batch YOLO annotations vào database
  * Hỗ trợ 6-field YOLO format: parent teeth (5-field) và subboxes (6-field)
- * 
- * Cases:
- * - Mixed: 5-field parents + 6-field subboxes → insert parents first, then subboxes
- * - All 6-field: Only subboxes → auto-create parent teeth from grouped subboxes
- * - All5-field: Only parents → insert as-is (no subboxes)
  *
  * @param {Object} client - PostgreSQL client (trong transaction)
  * @param {Array} annotations - Array of { image_id, category_id, category_name, bbox, area, plaque_status, tooth_id }
@@ -645,7 +642,10 @@ async function storeBatchYOLOAnnotations(client, annotations) {
   const parentAnnotations = annotations.filter(a => a.tooth_id == null);
   const subboxAnnotations = annotations.filter(a => a.tooth_id != null);
 
-  const parentMapping = {}; // { category_id: inserted_annotation_id }
+  console.log(`[storeBatchYOLOAnnotations] Total: ${annotations.length}, parents(5-field): ${parentAnnotations.length}, subboxes(6-field): ${subboxAnnotations.length}`);
+
+  // parentMapping: tooth_id (number) → inserted parent annotation id
+  const parentMapping = {};
 
   // Phase 1a: Insert explicit parent teeth (from 5-field lines)
   for (const ann of parentAnnotations) {
@@ -660,23 +660,23 @@ async function storeBatchYOLOAnnotations(client, annotations) {
       ann.plaque_status != null ? ann.plaque_status : null
     ]);
     const inserted = result.rows[0];
-    parentMapping[inserted.category_id] = inserted.id;
+    parentMapping[Number(inserted.category_id)] = inserted.id;
     results.push(inserted);
   }
 
   // Phase 1b: Auto-create parent teeth from subboxes when no explicit parents exist
   // Group subboxes by tooth_id
-  const subboxGroups = {}; // { tooth_id: [subbox, ...] }
+  const subboxGroups = {};
   for (const ann of subboxAnnotations) {
-    if (!subboxGroups[ann.tooth_id]) subboxGroups[ann.tooth_id] = [];
-    subboxGroups[ann.tooth_id].push(ann);
+    const tid = Number(ann.tooth_id);
+    if (!subboxGroups[tid]) subboxGroups[tid] = [];
+    subboxGroups[tid].push(ann);
   }
 
-  for (const [toothId, group] of Object.entries(subboxGroups)) {
-    // Skip if parent already exists
+  for (const [toothIdStr, group] of Object.entries(subboxGroups)) {
+    const toothId = Number(toothIdStr);
     if (parentMapping[toothId]) continue;
 
-    // Compute union bounding box from all subboxes
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const ann of group) {
       const [x, y, w, h] = ann.bbox;
@@ -688,9 +688,8 @@ async function storeBatchYOLOAnnotations(client, annotations) {
     const parentBbox = [minX, minY, maxX - minX, maxY - minY];
     const parentArea = (maxX - minX) * (maxY - minY);
 
-    // Use first subbox's category info for parent
     const firstSubbox = group[0];
-    const parentCategoryId = parseInt(toothId);
+    const parentCategoryId = toothId;
     const parentCategoryName = getCategoryName(parentCategoryId);
 
     const result = await client.query(parentInsertQuery, [
@@ -706,28 +705,31 @@ async function storeBatchYOLOAnnotations(client, annotations) {
     const inserted = result.rows[0];
     parentMapping[toothId] = inserted.id;
     results.push(inserted);
+    console.log(`[storeBatchYOLOAnnotations] Created parent: tooth_id=${toothId}, name=${parentCategoryName}, db_id=${inserted.id}, subboxes=${group.length}`);
   }
 
+  console.log(`[storeBatchYOLOAnnotations] Parent mapping:`, JSON.stringify(parentMapping));
+
   // Phase 2: Insert subboxes with parent_annotation_id
-  const regionCounters = {}; // { tooth_id: count }
+  const regionCounters = {};
 
   for (const ann of subboxAnnotations) {
-    const parentId = parentMapping[ann.tooth_id];
+    const tid = Number(ann.tooth_id);
+    const parentId = parentMapping[tid];
     if (!parentId) {
-      console.warn(`[YOLO Upload] No parent found for subbox tooth_id=${ann.tooth_id}, image_id=${ann.image_id}`);
+      console.warn(`[storeBatchYOLOAnnotations] SKIP subbox: no parent for tooth_id=${tid}, image_id=${ann.image_id}`);
       continue;
     }
 
-    // Assign region sequentially per tooth
-    if (!(ann.tooth_id in regionCounters)) regionCounters[ann.tooth_id] = 0;
-    const region = regionNames[regionCounters[ann.tooth_id] % 4];
-    regionCounters[ann.tooth_id]++;
+    if (!(tid in regionCounters)) regionCounters[tid] = 0;
+    const region = regionNames[regionCounters[tid] % 4];
+    regionCounters[tid]++;
 
     const result = await client.query(subboxInsertQuery, [
       ann.image_id,
       ann.image_id,
-      ann.category_id, // plaque status class (0 or 1)
-      region, // category_name = region name
+      tid, // category_id = tooth class
+      region,
       JSON.stringify(ann.bbox),
       ann.area,
       'yolo_upload',
@@ -739,6 +741,7 @@ async function storeBatchYOLOAnnotations(client, annotations) {
     results.push(result.rows[0]);
   }
 
+  console.log(`[storeBatchYOLOAnnotations] Done: inserted ${results.length} rows`);
   return results;
 }
 
