@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { bulkUploadYoloImages, getPatients, createPatient } from '../api'
+import { bulkUploadYoloImages, getPatients } from '../api'
 
 function BulkUploadYolo() {
   const navigate = useNavigate()
@@ -23,8 +23,6 @@ function BulkUploadYolo() {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState([])
   const [expandedGroups, setExpandedGroups] = useState({})
-  const [showValidationModal, setShowValidationModal] = useState(false)
-  const [validationSummary, setValidationSummary] = useState(null)
   const [newPatientForm, setNewPatientForm] = useState({
     name: '',
     phone: '',
@@ -288,12 +286,78 @@ function BulkUploadYolo() {
     }
 
     setPatientMappings(newMappings)
+
+    if (Object.keys(newMappings).length > 0) {
+      const autoAssignedCount = Object.values(newMappings).filter(m => m.type === 'existing').length
+      const autoCreateCount = Object.values(newMappings).filter(m => m.type === 'new').length
+
+      if (autoAssignedCount > 0 || autoCreateCount > 0) {
+        toast.success(
+          `✓ Tự động gán: ${autoAssignedCount} bệnh nhân có sẵn, ${autoCreateCount} bệnh nhân mới`,
+          { duration: 5000 }
+        )
+      }
+    }
   }
 
-  const handleMappingChange = (groupKey, mapping) => {
+  const handleSearchPatient = async (query) => {
+    setSearchQuery(query)
+    if (query.length < 2) {
+      setSearchResults([])
+      return
+    }
+
+    try {
+      const response = await getPatients(`?search=${encodeURIComponent(query)}&limit=15`)
+      setSearchResults(response.data.data || [])
+    } catch (error) {
+      setSearchResults([])
+    }
+  }
+
+  const handleSelectExistingPatient = (group, patient) => {
+    const groupKey = group.patientId
     setPatientMappings({
       ...patientMappings,
-      [groupKey]: mapping
+      [groupKey]: {
+        type: 'existing',
+        patient: patient
+      }
+    })
+    setEditingGroup(null)
+    setSearchQuery('')
+    setSearchResults([])
+  }
+
+  const handleCreateNewPatient = (group) => {
+    const groupKey = group.patientId
+
+    if (!newPatientForm.name.trim()) {
+      toast.error('Vui lòng nhập tên bệnh nhân')
+      return
+    }
+
+    setPatientMappings({
+      ...patientMappings,
+      [groupKey]: {
+        type: 'new',
+        patient: { ...newPatientForm }
+      }
+    })
+    setEditingGroup(null)
+    setNewPatientForm({ name: '', phone: '', dob: '', gender: 'unknown', notes: '' })
+  }
+
+  const handleEditGroup = (group) => {
+    setEditingGroup(group)
+    setSearchQuery('')
+    setSearchResults([])
+    setNewPatientForm({
+      name: `Bệnh Nhân #${group.patientId}`,
+      phone: '',
+      dob: '',
+      gender: 'unknown',
+      notes: `Patient ID: ${group.patientId}`
     })
   }
 
@@ -302,81 +366,6 @@ function BulkUploadYolo() {
     const newMappings = { ...patientMappings }
     delete newMappings[groupKey]
     setPatientMappings(newMappings)
-  }
-
-  const handleSearchPatients = async (query) => {
-    setSearchQuery(query)
-    if (query.length < 2) {
-      setSearchResults([])
-      return
-    }
-
-    try {
-      const response = await getPatients(`?search=${encodeURIComponent(query)}&limit=10`)
-      setSearchResults(response.data.data || [])
-    } catch (error) {
-      setSearchResults([])
-    }
-  }
-
-  const handleCreateNewPatient = async (groupKey) => {
-    try {
-      const response = await createPatient(newPatientForm)
-      const newPatient = response.data.data
-
-      setPatientMappings({
-        ...patientMappings,
-        [groupKey]: {
-          type: 'existing',
-          patient: newPatient
-        }
-      })
-
-      toast.success(`✓ Đã tạo bệnh nhân: ${newPatient.name}`)
-      setNewPatientForm({ name: '', phone: '', dob: '', gender: 'unknown', notes: '' })
-    } catch (error) {
-      toast.error('❌ Lỗi khi tạo bệnh nhân: ' + error.message)
-    }
-  }
-
-  // Upload validation summary
-  const generateValidationSummary = () => {
-    const expectedPositions = [
-      'upper_right', 'upper_center', 'upper_left',
-      'middle_right', 'middle_center', 'middle_left',
-      'lower_right', 'lower_center', 'lower_left'
-    ]
-
-    const positionLabels = {
-      'upper_right': 'Trên phải',
-      'upper_center': 'Trên giữa',
-      'upper_left': 'Trên trái',
-      'middle_right': 'Giữa phải',
-      'middle_center': 'Giữa',
-      'middle_left': 'Giữa trái',
-      'lower_right': 'Dưới phải',
-      'lower_center': 'Dưới giữa',
-      'lower_left': 'Dưới trái'
-    }
-
-    const missingReport = []
-
-    parsedData.forEach(group => {
-      const uploadedPositions = group.images.map(img => img.position)
-      const missingPositions = expectedPositions.filter(pos => !uploadedPositions.includes(pos))
-
-      if (missingPositions.length > 0) {
-        const missingLabels = missingPositions.map(pos => positionLabels[pos] || pos)
-        missingReport.push({
-          patientId: group.patientId,
-          totalImages: group.images.length,
-          missingCount: missingPositions.length,
-          missingPositions: missingLabels
-        })
-      }
-    })
-
-    return missingReport
   }
 
   // Validate before upload
@@ -400,27 +389,11 @@ function BulkUploadYolo() {
       return
     }
 
-    const missingReport = generateValidationSummary()
-    const totalImages = parsedData.reduce((sum, group) => sum + group.images.length, 0)
-    const totalLabels = labelFiles.length
-    const newPatientsCount = Object.values(patientMappings).filter(m => m.type === 'new').length
-    const existingPatientsCount = Object.values(patientMappings).filter(m => m.type === 'existing').length
-
-    setValidationSummary({
-      totalImages,
-      totalLabels,
-      newPatientsCount,
-      existingPatientsCount,
-      patientsCount: parsedData.length,
-      missingReport
-    })
-    setShowValidationModal(true)
+    await handleConfirmUpload()
   }
 
   // Confirm and send upload
   const handleConfirmUpload = async () => {
-    setShowValidationModal(false)
-
     try {
       setUploading(true)
       setUploadResult(null)
@@ -528,6 +501,9 @@ function BulkUploadYolo() {
     setParsedData([])
     setUploadResult(null)
     setPatientMappings({})
+    setEditingGroup(null)
+    setSearchQuery('')
+    setSearchResults([])
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
     }
@@ -694,6 +670,9 @@ function BulkUploadYolo() {
               const mapping = patientMappings[groupKey]
               const isEditing = editingGroup?.patientId === group.patientId
 
+              const missingCount = 9 - group.images.length
+              const hasMissing = missingCount > 0
+
               return (
                 <div key={idx} className="bulk-preview-card">
                   <div className="bulk-preview-header">
@@ -701,264 +680,299 @@ function BulkUploadYolo() {
                     <span className="badge badge-info">
                       {group.images.length} ảnh
                     </span>
-                    {mapping && (
-                      <span className={`badge ${mapping.type === 'existing' ? 'badge-success' : 'badge-warning'}`}>
-                        {mapping.type === 'existing' ? '✓ Có sẵn' : '+ Mới'}
-                      </span>
-                    )}
                   </div>
 
-                  {/* Image list */}
-                  <div style={{ marginTop: '12px' }}>
-                    <div style={{ fontSize: '12px', color: '#666', marginBottom: '8px' }}>
-                      Ảnh ({group.images.length}/9):
+                  {/* Missing Images Warning */}
+                  {hasMissing && (
+                    <div style={{
+                      padding: '8px',
+                      background: '#fff3cd',
+                      border: '1px solid #ffc107',
+                      borderRadius: '4px',
+                      marginBottom: '10px',
+                      fontSize: '12px',
+                      color: '#856404'
+                    }}>
+                      ⚠️ Thiếu {missingCount}/9 ảnh
                     </div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
-                      {group.images.map((img, imgIdx) => (
-                        <span key={imgIdx} style={{
-                          fontSize: '11px',
-                          padding: '2px 6px',
-                          background: '#e3f2fd',
-                          borderRadius: '4px',
-                          color: '#1565c0'
-                        }}>
-                          {img.positionCode}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
+                  )}
 
-                  {/* Patient mapping section */}
-                  <div style={{ marginTop: '12px', borderTop: '1px solid #eee', paddingTop: '12px' }}>
-                    {!mapping ? (
-                      <div>
-                        <div style={{ fontSize: '12px', color: '#666', marginBottom: '8px' }}>
-                          Chọn bệnh nhân:
+                  {/* Images Preview */}
+                  <div className="bulk-preview-images">
+                    <p style={{ fontSize: '12px', color: '#666', marginBottom: '8px', fontWeight: '600' }}>
+                      {group.images.length}/9 ảnh:
+                    </p>
+                    <div className="image-list">
+                      {(expandedGroups[groupKey] ? group.images : group.images.slice(0, 5)).map((img, i) => (
+                        <div key={i} className="image-preview-item" style={{ marginBottom: '4px' }}>
+                          <span className="image-icon" style={{ color: '#1E88E5', fontSize: '8px', marginRight: '6px' }}>●</span>
+                          <span
+                            className="image-name"
+                            title={img.filename}
+                            style={{
+                              fontSize: '11px',
+                              color: '#444',
+                              wordBreak: 'break-all',
+                              lineHeight: '1.4'
+                            }}
+                          >
+                            {img.filename}
+                          </span>
                         </div>
-                        <select
-                          className="form-select"
-                          onChange={(e) => {
-                            if (e.target.value === 'new') {
-                              handleMappingChange(groupKey, {
-                                type: 'new',
-                                patient: {
-                                  name: `Bệnh Nhân #${group.patientId}`,
-                                  phone: '',
-                                  dob: '',
-                                  gender: 'unknown',
-                                  notes: `Patient ID: ${group.patientId}`
-                                }
-                              })
-                            } else if (e.target.value) {
-                              const patient = searchResults.find(p => p.id === parseInt(e.target.value))
-                              if (patient) {
-                                handleMappingChange(groupKey, {
-                                  type: 'existing',
-                                  patient
-                                })
-                              }
-                            }
+                      ))}
+                      {group.images.length > 5 && (
+                        <div
+                          className="image-preview-item"
+                          onClick={() => toggleGroupExpansion(groupKey)}
+                          style={{
+                            cursor: 'pointer',
+                            color: '#1E88E5',
+                            fontSize: '11px',
+                            fontWeight: '600',
+                            marginTop: '6px',
+                            padding: '4px 0'
                           }}
-                          style={{ width: '100%', padding: '6px 8px', fontSize: '12px' }}
+                          onMouseEnter={(e) => e.target.style.textDecoration = 'underline'}
+                          onMouseLeave={(e) => e.target.style.textDecoration = 'none'}
                         >
-                          <option value="">-- Chọn --</option>
-                          <option value="new">+ Tạo mới</option>
-                          {searchResults.map(p => (
-                            <option key={p.id} value={p.id}>{p.name}</option>
-                          ))}
-                        </select>
-                      </div>
-                    ) : (
+                          {expandedGroups[groupKey]
+                            ? '▲ Thu gọn'
+                            : `▼ +${group.images.length - 5} ảnh khác`
+                          }
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Patient Assignment Status */}
+                  {mapping ? (
+                    <div style={{ marginTop: '10px', padding: '10px', background: '#e8f5e9', borderRadius: '4px', border: '1px solid #4CAF50' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <div>
-                          <div style={{ fontSize: '12px', fontWeight: '600' }}>
-                            {mapping.patient.name}
+                          <div style={{ fontSize: '12px', color: '#4CAF50', fontWeight: 'bold', marginBottom: '4px' }}>
+                            {mapping.type === 'existing' ? '✓ Bệnh nhân có sẵn' : '✓ Tạo bệnh nhân mới'}
                           </div>
-                          <div style={{ fontSize: '11px', color: '#666' }}>
-                            {mapping.type === 'existing' ? 'Bệnh nhân có sẵn' : 'Bệnh nhân mới'}
-                          </div>
+                          <div style={{ fontSize: '14px', fontWeight: '600' }}>{mapping.patient.name}</div>
+                          {mapping.patient.phone && (
+                            <div style={{ fontSize: '12px', color: '#666' }}>{mapping.patient.phone}</div>
+                          )}
                         </div>
                         <button
-                          className="button-secondary"
+                          className="button-secondary button"
                           onClick={() => handleRemoveMapping(group)}
-                          style={{ padding: '4px 8px', fontSize: '11px' }}
+                          style={{ padding: '4px 8px', fontSize: '12px' }}
                         >
-                          Xóa
+                          Đổi
                         </button>
                       </div>
-                    )}
-                  </div>
+                    </div>
+                  ) : (
+                    <div style={{ marginTop: '10px' }}>
+                      {!isEditing ? (
+                        <button
+                          className="button"
+                          onClick={() => handleEditGroup(group)}
+                          style={{ width: '100%' }}
+                        >
+                          Chọn/Tạo Bệnh Nhân
+                        </button>
+                      ) : (
+                        <div style={{ padding: '10px', background: '#f9fbfc', borderRadius: '4px', border: '1px solid #ddd' }}>
+                          {/* Search Existing */}
+                          <div style={{ marginBottom: '15px' }}>
+                            <label style={{ display: 'block', marginBottom: '5px', fontSize: '12px', fontWeight: '600' }}>
+                              Tìm bệnh nhân có sẵn
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="Tìm theo tên hoặc SĐT..."
+                              value={searchQuery}
+                              onChange={(e) => handleSearchPatient(e.target.value)}
+                              style={{ width: '100%', padding: '8px', fontSize: '14px' }}
+                            />
+                            {searchResults.length > 0 && (
+                              <div style={{ maxHeight: '150px', overflowY: 'auto', border: '1px solid #ddd', borderRadius: '4px', marginTop: '5px', background: 'white' }}>
+                                {searchResults.map(patient => (
+                                  <div
+                                    key={patient.id}
+                                    onClick={() => handleSelectExistingPatient(group, patient)}
+                                    style={{
+                                      padding: '8px',
+                                      cursor: 'pointer',
+                                      borderBottom: '1px solid #f0f0f0',
+                                      fontSize: '13px'
+                                    }}
+                                    onMouseEnter={(e) => e.target.style.background = '#f5f5f5'}
+                                    onMouseLeave={(e) => e.target.style.background = 'white'}
+                                  >
+                                    <div style={{ fontWeight: '600' }}>{patient.name}</div>
+                                    <div style={{ fontSize: '11px', color: '#666' }}>{patient.phone}</div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* OR Divider */}
+                          <div style={{ textAlign: 'center', margin: '10px 0', color: '#999', fontSize: '12px' }}>
+                            HOẶC
+                          </div>
+
+                          {/* Create New Patient */}
+                          <div>
+                            <label style={{ display: 'block', marginBottom: '5px', fontSize: '12px', fontWeight: '600' }}>
+                              Tạo bệnh nhân mới
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="Tên bệnh nhân *"
+                              value={newPatientForm.name}
+                              onChange={(e) => setNewPatientForm({...newPatientForm, name: e.target.value})}
+                              style={{ width: '100%', padding: '6px', fontSize: '13px', marginBottom: '5px' }}
+                            />
+                            <input
+                              type="text"
+                              placeholder="Số điện thoại"
+                              value={newPatientForm.phone}
+                              onChange={(e) => setNewPatientForm({...newPatientForm, phone: e.target.value})}
+                              style={{ width: '100%', padding: '6px', fontSize: '13px', marginBottom: '5px' }}
+                            />
+                            <input
+                              type="date"
+                              placeholder="Ngày sinh"
+                              value={newPatientForm.dob}
+                              onChange={(e) => setNewPatientForm({...newPatientForm, dob: e.target.value})}
+                              style={{ width: '100%', padding: '6px', fontSize: '13px', marginBottom: '5px' }}
+                            />
+                            <select
+                              value={newPatientForm.gender}
+                              onChange={(e) => setNewPatientForm({...newPatientForm, gender: e.target.value})}
+                              style={{ width: '100%', padding: '6px', fontSize: '13px', marginBottom: '10px' }}
+                            >
+                              <option value="unknown">Chưa xác định</option>
+                              <option value="male">Nam</option>
+                              <option value="female">Nữ</option>
+                            </select>
+                          </div>
+
+                          {/* Action Buttons */}
+                          <div style={{ display: 'flex', gap: '5px' }}>
+                            <button
+                              className="button"
+                              onClick={() => handleCreateNewPatient(group)}
+                              style={{ flex: 1, padding: '6px', fontSize: '13px' }}
+                            >
+                              Tạo & Gán
+                            </button>
+                            <button
+                              className="button-secondary button"
+                              onClick={() => setEditingGroup(null)}
+                              style={{ padding: '6px 12px', fontSize: '13px' }}
+                            >
+                              Hủy
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )
             })}
           </div>
 
-          {/* Search input */}
-          <div style={{ marginTop: '20px' }}>
-            <input
-              type="text"
-              className="form-input"
-              placeholder="Tìm bệnh nhân theo tên hoặc SĐT..."
-              value={searchQuery}
-              onChange={(e) => handleSearchPatients(e.target.value)}
-              style={{ width: '100%', padding: '8px 12px' }}
-            />
-          </div>
+          {/* Confirmation Summary */}
+          <div style={{ marginTop: '20px', padding: '20px', background: '#f8f9fa', borderRadius: '12px', border: '2px solid #e0e0e0' }}>
+            <h3 style={{ marginBottom: '15px', color: '#1F2937', fontSize: '16px' }}>📋 Xác Nhận Trước Khi Upload</h3>
 
-          {/* Upload Button */}
-          <div style={{ marginTop: '20px', textAlign: 'center' }}>
-            <button
-              className="button"
-              onClick={handleUpload}
-              disabled={uploading}
-              style={{
-                padding: '12px 32px',
-                fontSize: '16px',
-                fontWeight: '600'
-              }}
-            >
-              {uploading ? `⏳ Đang upload... ${uploadProgress}%` : `📤 Upload ${parsedData.length} nhóm`}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Validation Modal */}
-      {showValidationModal && validationSummary && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          background: 'rgba(0, 0, 0, 0.5)',
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'center',
-          zIndex: 1000,
-          padding: '20px'
-        }}>
-          <div style={{
-            background: 'white',
-            borderRadius: '16px',
-            padding: '30px',
-            maxWidth: '600px',
-            width: '100%',
-            maxHeight: '80vh',
-            overflow: 'auto',
-            boxShadow: '0 10px 40px rgba(0,0,0,0.2)'
-          }}>
-            <h2 style={{
-              marginBottom: '20px',
-              color: '#1F2937',
-              fontSize: '22px'
-            }}>
-              📊 Xác Nhận Upload YOLO
-            </h2>
-
-            {/* Summary Stats */}
-            <div style={{
-              background: '#f8f9fa',
-              borderRadius: '12px',
-              padding: '20px',
-              marginBottom: '20px'
-            }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
-                <div>
-                  <div style={{ fontSize: '13px', color: '#666', marginBottom: '5px' }}>Bệnh nhân</div>
+            <div style={{ marginBottom: '20px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '15px' }}>
+                <div style={{ padding: '12px', background: 'white', borderRadius: '8px', border: '1px solid #e0e0e0' }}>
                   <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#1E88E5' }}>
-                    {validationSummary.patientsCount}
+                    {parsedData.length}
                   </div>
+                  <div style={{ fontSize: '13px', color: '#666' }}>Nhóm ảnh</div>
                 </div>
-                <div>
-                  <div style={{ fontSize: '13px', color: '#666', marginBottom: '5px' }}>Ảnh</div>
+                <div style={{ padding: '12px', background: 'white', borderRadius: '8px', border: '1px solid #e0e0e0' }}>
                   <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#1E88E5' }}>
-                    {validationSummary.totalImages}
+                    {parsedData.reduce((sum, group) => sum + group.images.length, 0)}
                   </div>
+                  <div style={{ fontSize: '13px', color: '#666' }}>Tổng số ảnh</div>
                 </div>
-                <div>
-                  <div style={{ fontSize: '13px', color: '#666', marginBottom: '5px' }}>YOLO Labels</div>
-                  <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#9C27B0' }}>
-                    {validationSummary.totalLabels}
-                  </div>
-                </div>
-                <div>
-                  <div style={{ fontSize: '13px', color: '#666', marginBottom: '5px' }}>Bệnh nhân mới</div>
+                <div style={{ padding: '12px', background: 'white', borderRadius: '8px', border: '1px solid #e0e0e0' }}>
                   <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#4CAF50' }}>
-                    {validationSummary.newPatientsCount}
+                    {Object.values(patientMappings).filter(m => m.type === 'new').length}
                   </div>
+                  <div style={{ fontSize: '13px', color: '#666' }}>Bệnh nhân mới</div>
+                </div>
+                <div style={{ padding: '12px', background: 'white', borderRadius: '8px', border: '1px solid #e0e0e0' }}>
+                  <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#FFA726' }}>
+                    {Object.values(patientMappings).filter(m => m.type === 'existing').length}
+                  </div>
+                  <div style={{ fontSize: '13px', color: '#666' }}>Bệnh nhân có sẵn</div>
                 </div>
               </div>
+
+              {/* Status Message */}
+              {Object.keys(patientMappings).length < parsedData.length ? (
+                <div style={{
+                  padding: '12px 16px',
+                  background: '#FFF3E0',
+                  border: '1px solid #FFA726',
+                  borderRadius: '8px',
+                  color: '#E65100',
+                  fontSize: '14px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px'
+                }}>
+                  <span style={{ fontSize: '20px' }}>⚠️</span>
+                  <div>
+                    <strong>Chưa hoàn tất:</strong> {parsedData.length - Object.keys(patientMappings).length} nhóm chưa gán bệnh nhân.
+                    <br />
+                    <span style={{ fontSize: '13px' }}>Vui lòng gán bệnh nhân cho tất cả các nhóm trước khi upload.</span>
+                  </div>
+                </div>
+              ) : (
+                <div style={{
+                  padding: '12px 16px',
+                  background: '#E8F5E9',
+                  border: '1px solid #4CAF50',
+                  borderRadius: '8px',
+                  color: '#2E7D32',
+                  fontSize: '14px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px'
+                }}>
+                  <span style={{ fontSize: '20px' }}>✅</span>
+                  <div>
+                    <strong>Sẵn sàng upload!</strong> Tất cả {parsedData.length} nhóm đã được gán bệnh nhân.
+                  </div>
+                </div>
+              )}
             </div>
 
-            {/* Missing Images Warning */}
-            {validationSummary.missingReport.length > 0 ? (
-              <div style={{
-                background: '#FFF3E0',
-                border: '2px solid #FFA726',
-                borderRadius: '12px',
-                padding: '20px',
-                marginBottom: '20px'
-              }}>
-                <h3 style={{ color: '#E65100', fontSize: '16px', marginBottom: '15px' }}>
-                  ⚠️ Cảnh báo: {validationSummary.missingReport.length} bệnh nhân thiếu ảnh
-                </h3>
-                <div style={{ maxHeight: '200px', overflow: 'auto' }}>
-                  {validationSummary.missingReport.map((report, idx) => (
-                    <div key={idx} style={{
-                      background: 'white',
-                      padding: '12px',
-                      borderRadius: '8px',
-                      marginBottom: '10px',
-                      border: '1px solid #FFB74D'
-                    }}>
-                      <div style={{ fontWeight: 'bold', color: '#E65100', marginBottom: '5px' }}>
-                        Bệnh Nhân #{report.patientId}
-                      </div>
-                      <div style={{ fontSize: '13px', color: '#666' }}>
-                        ✅ Có: {report.totalImages}/9 ảnh | ❌ Thiếu: {report.missingPositions.join(', ')}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <div style={{
-                background: '#E8F5E9',
-                border: '2px solid #4CAF50',
-                borderRadius: '12px',
-                padding: '20px',
-                marginBottom: '20px',
-                textAlign: 'center'
-              }}>
-                <div style={{ fontSize: '40px', marginBottom: '10px' }}>✅</div>
-                <div style={{ color: '#2E7D32', fontSize: '16px', fontWeight: '600' }}>
-                  Hoàn hảo! Tất cả bệnh nhân đều có đủ 9 ảnh
-                </div>
-              </div>
-            )}
-
             {/* Action Buttons */}
-            <div style={{ display: 'flex', gap: '12px', marginTop: '25px' }}>
+            <div style={{ display: 'flex', gap: '12px' }}>
               <button
                 className="button"
-                onClick={handleConfirmUpload}
+                onClick={handleUpload}
                 disabled={uploading}
                 style={{
                   flex: 1,
                   padding: '14px',
                   fontSize: '15px',
                   fontWeight: '600',
-                  background: '#4CAF50',
                   opacity: uploading ? 0.5 : 1,
                   cursor: uploading ? 'not-allowed' : 'pointer'
                 }}
               >
-                {uploading ? `⏳ Đang xử lý... ${uploadProgress}%` : '✓ Xác Nhận Upload'}
+                {uploading ? `⏳ Đang xử lý... ${uploadProgress}%` : `🚀 Xác nhận và Upload ${parsedData.length} nhóm`}
               </button>
               <button
                 className="button-secondary button"
-                onClick={() => setShowValidationModal(false)}
+                onClick={handleClear}
                 disabled={uploading}
                 style={{
                   padding: '14px 24px',
@@ -966,7 +980,7 @@ function BulkUploadYolo() {
                   fontWeight: '600'
                 }}
               >
-                Hủy
+                ❌ Hủy
               </button>
             </div>
           </div>

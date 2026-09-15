@@ -524,7 +524,8 @@ function convertYOLOToPixels(yoloAnnotations, imageWidth, imageHeight) {
       category_name: getCategoryName(toothClassId),
       bbox: [x, y, w, h],
       area: w * h,
-      plaque_status: ann.class_id // 0=no_plaque, 1=has_plaque
+      plaque_status: ann.class_id, // 0=no_plaque, 1=has_plaque
+      tooth_id: ann.tooth_id || null // 6th field: parent tooth class for subboxes
     };
   });
 }
@@ -609,29 +610,131 @@ function parseYOLOFilesByPatient(yoloFiles) {
 
 /**
  * Store batch YOLO annotations vào database
+ * Hỗ trợ 6-field YOLO format: parent teeth (5-field) và subboxes (6-field)
+ * 
+ * Cases:
+ * - Mixed: 5-field parents + 6-field subboxes → insert parents first, then subboxes
+ * - All 6-field: Only subboxes → auto-create parent teeth from grouped subboxes
+ * - All5-field: Only parents → insert as-is (no subboxes)
+ *
  * @param {Object} client - PostgreSQL client (trong transaction)
- * @param {Array} annotations - Array of { image_id, category_id, category_name, bbox, area, plaque_status }
+ * @param {Array} annotations - Array of { image_id, category_id, category_name, bbox, area, plaque_status, tooth_id }
  * @returns {Array} - Array of inserted records
  */
 async function storeBatchYOLOAnnotations(client, annotations) {
-  const query = `
+  const results = [];
+
+  const parentInsertQuery = `
     INSERT INTO image_annotations
       (image_id, coco_image_id, category_id, category_name, bbox, area, source_type, plaque_status)
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    RETURNING id, category_id
+  `;
+
+  const subboxInsertQuery = `
+    INSERT INTO image_annotations
+      (image_id, coco_image_id, category_id, category_name, bbox, area,
+       source_type, parent_annotation_id, subbox_region, plaque_status, predicted_plaque)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
     RETURNING *
   `;
 
-  const results = [];
-  for (const ann of annotations) {
-    const result = await client.query(query, [
+  const regionNames = ['top_left', 'top_right', 'bottom_left', 'bottom_right'];
+
+  // Separate parents (5-field, tooth_id=null) and subboxes (6-field, tooth_id!=null)
+  const parentAnnotations = annotations.filter(a => a.tooth_id == null);
+  const subboxAnnotations = annotations.filter(a => a.tooth_id != null);
+
+  const parentMapping = {}; // { category_id: inserted_annotation_id }
+
+  // Phase 1a: Insert explicit parent teeth (from 5-field lines)
+  for (const ann of parentAnnotations) {
+    const result = await client.query(parentInsertQuery, [
       ann.image_id,
-      ann.image_id, // coco_image_id = image_id for YOLO uploads
+      ann.image_id,
       ann.category_id,
       ann.category_name,
       JSON.stringify(ann.bbox),
       ann.area,
       'yolo_upload',
-      ann.plaque_status || null
+      ann.plaque_status != null ? ann.plaque_status : null
+    ]);
+    const inserted = result.rows[0];
+    parentMapping[inserted.category_id] = inserted.id;
+    results.push(inserted);
+  }
+
+  // Phase 1b: Auto-create parent teeth from subboxes when no explicit parents exist
+  // Group subboxes by tooth_id
+  const subboxGroups = {}; // { tooth_id: [subbox, ...] }
+  for (const ann of subboxAnnotations) {
+    if (!subboxGroups[ann.tooth_id]) subboxGroups[ann.tooth_id] = [];
+    subboxGroups[ann.tooth_id].push(ann);
+  }
+
+  for (const [toothId, group] of Object.entries(subboxGroups)) {
+    // Skip if parent already exists
+    if (parentMapping[toothId]) continue;
+
+    // Compute union bounding box from all subboxes
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const ann of group) {
+      const [x, y, w, h] = ann.bbox;
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x + w);
+      maxY = Math.max(maxY, y + h);
+    }
+    const parentBbox = [minX, minY, maxX - minX, maxY - minY];
+    const parentArea = (maxX - minX) * (maxY - minY);
+
+    // Use first subbox's category info for parent
+    const firstSubbox = group[0];
+    const parentCategoryId = parseInt(toothId);
+    const parentCategoryName = getCategoryName(parentCategoryId);
+
+    const result = await client.query(parentInsertQuery, [
+      firstSubbox.image_id,
+      firstSubbox.image_id,
+      parentCategoryId,
+      parentCategoryName,
+      JSON.stringify(parentBbox),
+      parentArea,
+      'yolo_upload',
+      null
+    ]);
+    const inserted = result.rows[0];
+    parentMapping[toothId] = inserted.id;
+    results.push(inserted);
+  }
+
+  // Phase 2: Insert subboxes with parent_annotation_id
+  const regionCounters = {}; // { tooth_id: count }
+
+  for (const ann of subboxAnnotations) {
+    const parentId = parentMapping[ann.tooth_id];
+    if (!parentId) {
+      console.warn(`[YOLO Upload] No parent found for subbox tooth_id=${ann.tooth_id}, image_id=${ann.image_id}`);
+      continue;
+    }
+
+    // Assign region sequentially per tooth
+    if (!(ann.tooth_id in regionCounters)) regionCounters[ann.tooth_id] = 0;
+    const region = regionNames[regionCounters[ann.tooth_id] % 4];
+    regionCounters[ann.tooth_id]++;
+
+    const result = await client.query(subboxInsertQuery, [
+      ann.image_id,
+      ann.image_id,
+      ann.category_id, // plaque status class (0 or 1)
+      region, // category_name = region name
+      JSON.stringify(ann.bbox),
+      ann.area,
+      'yolo_upload',
+      parentId,
+      region,
+      ann.plaque_status != null ? ann.plaque_status : null,
+      ann.plaque_status != null ? ann.plaque_status : null
     ]);
     results.push(result.rows[0]);
   }

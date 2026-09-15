@@ -1314,7 +1314,8 @@ class BulkUploadController {
                             category_name: ann.category_name,
                             bbox: ann.bbox,
                             area: ann.area,
-                            plaque_status: ann.plaque_status
+                            plaque_status: ann.plaque_status,
+                            tooth_id: ann.tooth_id || null
                         }));
 
                         await annotationService.storeBatchYOLOAnnotations(client, annotationsToStore);

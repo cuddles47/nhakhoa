@@ -16,8 +16,8 @@ function Sidebar({ onLogout }) {
     {
       path: '/bulk-upload',
       icon: FiUploadCloud,
-      label: 'Bulk upload ảnh raw',
-      description: 'Upload ảnh raw (COCO)',
+      label: 'Bulk upload COCO',
+      description: 'Upload ảnh raw + COCO annotations',
       exact: true
     },
     {

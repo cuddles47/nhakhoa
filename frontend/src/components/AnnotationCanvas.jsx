@@ -212,8 +212,29 @@ const AnnotationCanvas = ({
         Canvas: {canvasRef.current ? `${canvasRef.current.width}x${canvasRef.current.height}` : 'Not mounted'} | 
         Image: {imageRef.current ? `${imageRef.current.width}x${imageRef.current.height}` : 'Not loaded'} | 
         Teeth: {teeth.length} | 
+        Subboxes: {teeth.reduce((sum, t) => sum + (t.subboxes?.length || 0), 0)} | 
         Handler: {onSubboxClick ? 'OK' : 'Missing'}
       </div>
+
+      {/* No subboxes warning */}
+      {teeth.length > 0 && teeth.every(t => !t.subboxes || t.subboxes.length === 0) && (
+        <div style={{
+          position: 'absolute',
+          top: '50px',
+          left: '10px',
+          background: 'rgba(255, 193, 7, 0.9)',
+          color: '#000',
+          padding: '8px 12px',
+          borderRadius: '4px',
+          fontSize: '12px',
+          fontWeight: '500',
+          pointerEvents: 'none',
+          zIndex: 1000,
+          maxWidth: '250px'
+        }}>
+          ⚠️ Chưa có subbox annotations. Hãy chạy image processing để tạo subboxes.
+        </div>
+      )}
       
       {/* Tooltip */}
       {hoveredSubbox && (
