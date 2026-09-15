@@ -10,22 +10,49 @@ class PatientDeletionError extends Error {
 const toNumber = (value) => Number.parseInt(value, 10) || 0;
 
 function createPatientDeletionService(dependencies = {}) {
-  const getDependencies = () => ({
-    pool: dependencies.pool || require('../config/database').pool,
-    storage: dependencies.storage || require('./storage'),
-    queue: dependencies.queue || require('../config/queue').imageProcessingQueue,
-  });
+  const getDependencies = () => {
+    const pool = dependencies.pool || require('../config/database').pool;
+    const storage = dependencies.storage || require('./storage');
+    const storageDeletion = dependencies.storageDeletion
+      || require('./storageDeletionService').createStorageDeletionService({ pool, storage });
+
+    return {
+      pool,
+      storage,
+      storageDeletion,
+      queue: dependencies.queue || require('../config/queue').imageProcessingQueue,
+    };
+  };
 
   async function inspectAndRemoveQueueJobs(queue, jobRecords) {
     const removableJobs = [];
+    const activeDatabaseStatuses = new Set(['creating', 'queued', 'processing']);
 
     try {
       // Inspect every job first so an active job never results in a partial cancellation.
       for (const record of jobRecords) {
-        if (!record.bullmq_job_id) continue;
+        if (!record.bullmq_job_id) {
+          if (activeDatabaseStatuses.has(record.status)) {
+            throw new PatientDeletionError(
+              'Không thể xác minh image-processing job đang chạy. Vui lòng kiểm tra lại job trước khi xóa.',
+              409,
+              'PATIENT_PROCESSING_ACTIVE'
+            );
+          }
+          continue;
+        }
 
         const job = await queue.getJob(record.bullmq_job_id);
-        if (!job) continue;
+        if (!job) {
+          if (activeDatabaseStatuses.has(record.status)) {
+            throw new PatientDeletionError(
+              'Không tìm thấy image-processing job đang hoạt động trong BullMQ. Vui lòng đồng bộ trạng thái job trước khi xóa.',
+              409,
+              'PATIENT_PROCESSING_ACTIVE'
+            );
+          }
+          continue;
+        }
 
         const state = await job.getState();
         if (state === 'active') {
@@ -37,17 +64,6 @@ function createPatientDeletionService(dependencies = {}) {
         }
 
         removableJobs.push({ job, record, state });
-      }
-
-      const unverifiableActiveJob = jobRecords.find(
-        (record) => record.status === 'processing' && !record.bullmq_job_id
-      );
-      if (unverifiableActiveJob) {
-        throw new PatientDeletionError(
-          'Không thể xác minh image-processing job đang chạy. Vui lòng kiểm tra lại job trước khi xóa.',
-          409,
-          'PATIENT_PROCESSING_ACTIVE'
-        );
       }
 
       const removedDatabaseJobIds = [];
@@ -104,7 +120,7 @@ function createPatientDeletionService(dependencies = {}) {
       throw new PatientDeletionError('Patient ID không hợp lệ', 400, 'INVALID_PATIENT_ID');
     }
 
-    const { pool, storage, queue } = getDependencies();
+    const { pool, storage, storageDeletion, queue } = getDependencies();
     const client = await pool.connect();
     let transactionStarted = false;
     let removedQueueJobIds = [];
@@ -215,12 +231,28 @@ function createPatientDeletionService(dependencies = {}) {
           .filter(Boolean)
       );
 
-      const objectsToDelete = [...candidateObjectNames].filter(
-        (objectName) => !externallyReferencedObjects.has(objectName)
+      const snapshotPreservedSharedObjects = [...candidateObjectNames].filter(
+        (objectName) => objectName.startsWith('processed_by_hash/')
+          && externallyReferencedObjects.has(objectName)
+      ).length;
+      // Every content-addressed candidate goes through the locked, fresh reference
+      // check. This also cleans the object correctly when two patients sharing it
+      // are deleted concurrently.
+      const sharedObjectNames = [...candidateObjectNames].filter(
+        (objectName) => objectName.startsWith('processed_by_hash/')
       );
-      const preservedSharedObjects = candidateObjectNames.size - objectsToDelete.length;
+      const immediateObjectNames = [...candidateObjectNames].filter(
+        (objectName) => !objectName.startsWith('processed_by_hash/')
+          && !externallyReferencedObjects.has(objectName)
+      );
 
       removedQueueJobIds = await inspectAndRemoveQueueJobs(queue, jobsResult.rows);
+
+      const deletionJob = await storageDeletion.createDeletionJob(client, {
+        patientId: parsedPatientId,
+        immediateObjectNames,
+        sharedObjectNames,
+      });
 
       const deleteResult = await client.query(
         'DELETE FROM patients WHERE id = $1 RETURNING id',
@@ -230,17 +262,40 @@ function createPatientDeletionService(dependencies = {}) {
         throw new PatientDeletionError('Không thể xóa bệnh nhân', 500, 'PATIENT_DATABASE_DELETE_FAILED');
       }
 
-      const storageDeleteResult = await storage.deleteFiles(objectsToDelete);
-      if (!storageDeleteResult.success) {
-        throw new PatientDeletionError(
-          `Không thể xóa ảnh trong MinIO: ${storageDeleteResult.error}`,
-          502,
-          'PATIENT_MINIO_DELETE_FAILED'
-        );
-      }
-
       await client.query('COMMIT');
       transactionStarted = false;
+
+      let storageCleanupResult = {
+        jobId: null,
+        status: 'completed',
+        deletedCount: 0,
+        preservedCount: 0,
+        error: null,
+      };
+
+      if (deletionJob) {
+        try {
+          storageCleanupResult = await storageDeletion.processDeletionJob(deletionJob.id)
+            || {
+              jobId: deletionJob.id,
+              status: 'pending',
+              deletedCount: 0,
+              preservedCount: 0,
+              error: 'Storage cleanup job has not been claimed yet',
+            };
+        } catch (cleanupError) {
+          // The outbox was committed with the patient deletion. The background worker
+          // will retry, so a remote cleanup failure never rolls the database back.
+          console.error('Initial patient storage cleanup failed:', cleanupError);
+          storageCleanupResult = {
+            jobId: deletionJob.id,
+            status: 'pending',
+            deletedCount: 0,
+            preservedCount: 0,
+            error: cleanupError.message,
+          };
+        }
+      }
 
       const dependencyCounts = countsResult.rows[0] || {};
       return {
@@ -256,8 +311,13 @@ function createPatientDeletionService(dependencies = {}) {
         deletedCases: toNumber(dependencyCounts.cases),
         deletedCaseDoctors: toNumber(dependencyCounts.case_doctors),
         deletedProcessingJobs: jobsResult.rows.length,
-        deletedMinioObjects: storageDeleteResult.deletedCount || 0,
-        preservedSharedObjects,
+        deletedMinioObjects: storageCleanupResult.deletedCount || 0,
+        preservedSharedObjects: storageCleanupResult.status === 'completed'
+          ? (storageCleanupResult.preservedCount || 0)
+          : snapshotPreservedSharedObjects,
+        storageCleanupStatus: storageCleanupResult.status,
+        storageDeletionJobId: storageCleanupResult.jobId,
+        storageCleanupError: storageCleanupResult.error || null,
       };
     } catch (error) {
       if (transactionStarted) {

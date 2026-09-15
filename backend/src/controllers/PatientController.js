@@ -83,9 +83,12 @@ class PatientController {
         try {
             const { id } = req.params;
             const result = await patientDeletionService.deletePatient(id);
-            res.json({
+            const storageCleanupPending = result.storageCleanupStatus !== 'completed';
+            res.status(storageCleanupPending ? 202 : 200).json({
                 success: true,
-                message: 'Đã xóa bệnh nhân và toàn bộ dữ liệu liên quan',
+                message: storageCleanupPending
+                    ? 'Đã xóa bệnh nhân. Ảnh trong MinIO đang được hệ thống tiếp tục dọn dẹp.'
+                    : 'Đã xóa bệnh nhân và toàn bộ dữ liệu liên quan',
                 data: result
             });
         } catch (error) {

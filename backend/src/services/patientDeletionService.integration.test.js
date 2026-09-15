@@ -7,6 +7,7 @@ test('hard-deletes the complete patient graph and MinIO objects', { skip: !shoul
   require('dotenv').config();
   const db = require('../config/database');
   const storage = require('./storage');
+  const storageDeletion = require('./storageDeletionService');
   const { createPatientDeletionService } = require('./patientDeletionService');
 
   const targetPatientId = 900001;
@@ -42,6 +43,10 @@ test('hard-deletes the complete patient graph and MinIO objects', { skip: !shoul
   });
 
   try {
+    await db.query(
+      'DELETE FROM storage_deletion_jobs WHERE patient_id = ANY($1::int[])',
+      [[targetPatientId, otherPatientId]]
+    );
     await db.query('DELETE FROM patients WHERE id = ANY($1::int[])', [[targetPatientId, otherPatientId]]);
     await storage.deleteFiles(allFixtureObjects);
 
@@ -141,6 +146,30 @@ test('hard-deletes the complete patient graph and MinIO objects', { skip: !shoul
     assert.equal(result.deletedAnnotations, 2);
     assert.equal(result.deletedProcessingJobs, 1);
     assert.equal(result.preservedSharedObjects, 1);
+    assert.ok(['pending', 'processing', 'completed'].includes(result.storageCleanupStatus));
+
+    let deletionJobResult = null;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      await storageDeletion.processDeletionJob(result.storageDeletionJobId);
+      deletionJobResult = await db.query(
+        `SELECT status, deleted_count, preserved_count, last_error,
+                immediate_object_names, shared_object_names
+         FROM storage_deletion_jobs
+         WHERE id = $1`,
+        [result.storageDeletionJobId]
+      );
+      if (deletionJobResult.rows[0]?.status === 'completed') break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    assert.deepEqual(deletionJobResult.rows[0], {
+      status: 'completed',
+      deleted_count: 3,
+      preserved_count: 1,
+      last_error: null,
+      immediate_object_names: [],
+      shared_object_names: [],
+    });
 
     const remainingTargetRows = await db.query(
       `SELECT
@@ -187,8 +216,37 @@ test('hard-deletes the complete patient graph and MinIO objects', { skip: !shoul
 
     const keeperResult = await db.query('SELECT id FROM patients WHERE id = $1', [otherPatientId]);
     assert.equal(keeperResult.rowCount, 1);
+
+    // Delete the final referencing patient. The same content-addressed object is
+    // scheduled again, rechecked under the advisory lock, and then removed.
+    const keeperDeletionResult = await service.deletePatient(otherPatientId);
+    let keeperDeletionJob = null;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      await storageDeletion.processDeletionJob(keeperDeletionResult.storageDeletionJobId);
+      keeperDeletionJob = await db.query(
+        `SELECT status, deleted_count, preserved_count
+         FROM storage_deletion_jobs
+         WHERE id = $1`,
+        [keeperDeletionResult.storageDeletionJobId]
+      );
+      if (keeperDeletionJob.rows[0]?.status === 'completed') break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    assert.deepEqual(keeperDeletionJob.rows[0], {
+      status: 'completed',
+      deleted_count: 2,
+      preserved_count: 0,
+    });
+    assert.equal(await storage.objectExists(sharedProcessedObject), false);
+    assert.equal(await storage.objectExists(otherRawObject), false);
+
   } finally {
     await db.query('DELETE FROM patients WHERE id = ANY($1::int[])', [[targetPatientId, otherPatientId]]);
+    await db.query(
+      'DELETE FROM storage_deletion_jobs WHERE patient_id = ANY($1::int[])',
+      [[targetPatientId, otherPatientId]]
+    );
     await storage.deleteFiles(allFixtureObjects);
     await db.pool.end();
   }

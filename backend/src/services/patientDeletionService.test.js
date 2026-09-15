@@ -16,6 +16,7 @@ const extractObjectName = (value) => {
 function createFixture(options = {}) {
   const queries = [];
   const deletedObjects = [];
+  const deletionJobs = [];
   let released = false;
 
   const client = {
@@ -103,21 +104,36 @@ function createFixture(options = {}) {
     async listFilesByPrefix() {
       return ['visits/10/raw.jpg', 'visits/10/orphaned-old-image.jpg'];
     },
-    async deleteFiles(objectNames) {
-      deletedObjects.push(...objectNames);
-      if (options.minioDeleteFails) {
-        return { success: false, error: 'MinIO unavailable' };
-      }
-      return { success: true, deletedCount: objectNames.length };
+  };
+
+  const storageDeletion = {
+    async createDeletionJob(_client, data) {
+      const job = { id: 40, ...data };
+      deletionJobs.push(job);
+      return job;
+    },
+    async processDeletionJob(jobId) {
+      const job = deletionJobs.find((item) => item.id === jobId);
+      if (options.storageCleanupThrows) throw new Error('MinIO unavailable');
+
+      deletedObjects.push(...job.immediateObjectNames);
+      return {
+        jobId,
+        status: options.storageCleanupStatus || 'completed',
+        deletedCount: job.immediateObjectNames.length,
+        preservedCount: options.cleanupPreservedCount ?? job.sharedObjectNames.length,
+        error: options.storageCleanupStatus === 'pending' ? 'retry scheduled' : null,
+      };
     },
   };
 
-  const service = createPatientDeletionService({ pool, storage, queue });
+  const service = createPatientDeletionService({ pool, storage, storageDeletion, queue });
 
   return {
     service,
     queries,
     deletedObjects,
+    deletionJobs,
     wasReleased: () => released,
   };
 }
@@ -160,20 +176,69 @@ test('rejects deletion and rolls back while an image-processing job is active', 
   assert.ok(fixture.wasReleased());
 });
 
-test('rolls back database deletion when MinIO cleanup fails', async () => {
-  const fixture = createFixture({ minioDeleteFails: true });
+test('commits database deletion and leaves a retryable outbox job when MinIO cleanup fails', async () => {
+  const fixture = createFixture({ storageCleanupThrows: true });
+  const originalConsoleError = console.error;
+  console.error = () => {};
+  let result;
+  try {
+    result = await fixture.service.deletePatient(7);
+  } finally {
+    console.error = originalConsoleError;
+  }
+
+  assert.equal(result.storageCleanupStatus, 'pending');
+  assert.equal(result.storageDeletionJobId, 40);
+  assert.equal(fixture.deletionJobs.length, 1);
+  assert.ok(fixture.queries.some((sql) => sql.startsWith('DELETE FROM patients')));
+  assert.ok(fixture.queries.includes('COMMIT'));
+  assert.ok(!fixture.queries.includes('ROLLBACK'));
+  assert.ok(fixture.wasReleased());
+});
+
+test('fails closed when a processing database job is missing from BullMQ', async () => {
+  let released = false;
+  const basePool = {
+    async connect() {
+      const client = {
+        async query(sql) {
+          const compactSql = sql.replace(/\s+/g, ' ').trim();
+          if (compactSql.startsWith('SELECT id, name FROM patients')) return { rows: [{ id: 7, name: 'Patient 7' }] };
+          if (compactSql.startsWith('SELECT id, annotation_file_url FROM visits')) return { rows: [{ id: 10, annotation_file_url: null }] };
+          if (compactSql.startsWith('SELECT i.id, i.url, i.url_processed')) return { rows: [] };
+          if (compactSql.startsWith('SELECT (SELECT COUNT(*) FROM cases')) return { rows: [{}] };
+          if (compactSql.startsWith('SELECT id, bullmq_job_id, status')) {
+            return { rows: [{ id: 30, bullmq_job_id: 'missing-job', status: 'processing' }] };
+          }
+          if (compactSql.startsWith('SELECT url AS value')) return { rows: [] };
+          return { rows: [], rowCount: 0 };
+        },
+        release() { released = true; },
+      };
+      return client;
+    },
+    async query() { return { rows: [] }; },
+  };
+  const service = createPatientDeletionService({
+    pool: basePool,
+    storage: {
+      extractObjectName: () => null,
+      listFilesByPrefix: async () => [],
+    },
+    storageDeletion: {
+      createDeletionJob: async () => null,
+      processDeletionJob: async () => null,
+    },
+    queue: { getJob: async () => null },
+  });
 
   await assert.rejects(
-    () => fixture.service.deletePatient(7),
+    () => service.deletePatient(7),
     (error) => error instanceof PatientDeletionError
-      && error.statusCode === 502
-      && error.code === 'PATIENT_MINIO_DELETE_FAILED'
+      && error.statusCode === 409
+      && error.code === 'PATIENT_PROCESSING_ACTIVE'
   );
-
-  assert.ok(fixture.queries.some((sql) => sql.startsWith('DELETE FROM patients')));
-  assert.ok(fixture.queries.includes('ROLLBACK'));
-  assert.ok(!fixture.queries.includes('COMMIT'));
-  assert.ok(fixture.wasReleased());
+  assert.equal(released, true);
 });
 
 test('rejects invalid patient ids before opening a database connection', async () => {

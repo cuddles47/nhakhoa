@@ -35,9 +35,11 @@ MinIO cleanup also needs special handling:
 4. Refuse deletion with HTTP `409` while a BullMQ image-processing job is active.
 5. Remove non-active retained BullMQ jobs before deleting their database records.
 6. Collect MinIO objects from database URLs and from every visit prefix.
-7. Preserve objects still referenced outside the patient being deleted.
-8. Roll back PostgreSQL when MinIO cleanup fails.
-9. Warn users in the frontend that visits, images, annotations, and objects are permanently deleted.
+7. Commit the database deletion together with a durable MinIO-cleanup outbox record.
+8. Retry MinIO cleanup idempotently instead of rolling the database back after a partial object deletion.
+9. Serialize BullMQ job creation with patient deletion by creating `processing_jobs` before enqueue.
+10. Protect `processed_by_hash` with a shared PostgreSQL advisory lock and a fresh reference check.
+11. Warn users in the frontend that visits, images, annotations, and objects are permanently deleted.
 
 ## 3. Implementation
 
@@ -50,19 +52,22 @@ MinIO cleanup also needs special handling:
 3. Load all visits, image URLs, annotation URLs, dependency counts, and processing jobs.
 4. List MinIO objects below each `visits/{visitId}/` prefix to include replaced or orphaned visit files.
 5. Normalize relative URLs, absolute URLs, and presigned URLs into MinIO object names.
-6. Exclude object names referenced by images or visits outside the target patient.
-7. Reject active jobs and remove non-active BullMQ jobs.
-8. Hard-delete the patient; PostgreSQL cascades the dependent rows.
-9. Delete the selected MinIO objects in batches of 1,000.
-10. Commit only after MinIO cleanup succeeds.
+6. Exclude visit-owned object names referenced outside the target patient.
+7. Reject active or unverifiable jobs and remove non-active BullMQ jobs.
+8. Insert a `storage_deletion_jobs` outbox record in the same transaction as the hard delete.
+9. Hard-delete the patient and commit the PostgreSQL transaction.
+10. Attempt MinIO cleanup immediately after commit; the background worker retries any partial or transient failure.
+11. Recheck every `processed_by_hash` reference while holding the same advisory lock used by the image-processing writer.
 
 The controller returns structured HTTP errors:
 
 - `400 INVALID_PATIENT_ID`
 - `404 PATIENT_NOT_FOUND`
 - `409 PATIENT_PROCESSING_ACTIVE`
-- `502 PATIENT_MINIO_LIST_FAILED` or `PATIENT_MINIO_DELETE_FAILED`
+- `502 PATIENT_MINIO_LIST_FAILED`
 - `503 PATIENT_QUEUE_CLEANUP_FAILED`
+
+The endpoint returns `200` when storage cleanup finishes in the request and `202` when the database deletion is complete but the durable cleanup job is still pending.
 
 The delete route now requires authentication because it permanently removes clinical data.
 
@@ -70,10 +75,13 @@ The delete route now requires authentication because it permanently removes clin
 
 `init-db/009_cascade_processing_jobs_on_visit_delete.sql` changes the processing job foreign key to `ON DELETE CASCADE`. The migration is idempotent.
 
+`init-db/010_create_storage_deletion_outbox.sql` adds the durable `storage_deletion_jobs` outbox and documents the new `creating` processing-job status. The outbox does not reference `patients`, so its retry data remains available after the patient row is hard-deleted.
+
 For an existing database volume, apply it explicitly:
 
 ```powershell
 docker exec -i nhakhoa-postgres psql -v ON_ERROR_STOP=1 -U postgres -d dental_db -f /docker-entrypoint-initdb.d/009_cascade_processing_jobs_on_visit_delete.sql
+docker exec -i nhakhoa-postgres psql -v ON_ERROR_STOP=1 -U postgres -d dental_db -f /docker-entrypoint-initdb.d/010_create_storage_deletion_outbox.sql
 ```
 
 Adding the file alone does not migrate an existing volume because PostgreSQL's Docker initialization directory only runs for a new data directory.
@@ -85,6 +93,22 @@ Adding the file alone does not migrate an existing volume because PostgreSQL's D
 - `extractObjectName()` for relative, absolute, and presigned URLs.
 - `listFilesByPrefix()` for visit-level orphan cleanup.
 - Deduplicated, batched `deleteFiles()` with a deletion count.
+
+`backend/src/services/storageDeletionService.js` now:
+
+- Claims cleanup jobs with `FOR UPDATE SKIP LOCKED` semantics.
+- Retries the full idempotent object list after a partial MinIO failure.
+- Reclaims stale `processing` jobs after five minutes.
+- Takes `pg_advisory_xact_lock(hashtextextended(object_name, 0))` before deleting a content-addressed object.
+- Rechecks current database references after acquiring the advisory lock.
+
+`backend/src/workers/storageDeletionWorker.js` polls and retries cleanup jobs. It starts and stops with the existing image-processing worker.
+
+`backend/src/services/processedImageReferenceService.js` uses the same advisory lock while ensuring a processed object exists and committing `images.url_processed`. This closes the race between a writer reusing a hash and garbage collection deleting that hash.
+
+### BullMQ job creation
+
+`ImageProcessingController` now locks the visit, inserts a `processing_jobs` row with status `creating`, commits it, and only then enqueues BullMQ. The database primary key is used as the BullMQ `jobId`, so the worker and database always address the same job. Patient deletion fails closed when a `creating`, `queued`, or `processing` database job cannot be verified in BullMQ.
 
 ### Frontend
 
@@ -108,11 +132,15 @@ Passed scenarios:
 
 - Complete patient deletion while preserving a shared processed object.
 - HTTP `409` and rollback when a BullMQ job is active.
-- Database rollback when MinIO deletion fails.
+- Database deletion remains committed while a failed MinIO cleanup stays retryable in the outbox.
+- A partial MinIO failure retries the complete idempotent object list.
+- Processing-job metadata is committed before BullMQ enqueue and uses the same job ID.
+- Processed-image writers and cleanup use the same advisory lock.
+- A fresh shared-object reference preserves the object during cleanup.
 - Invalid patient ID rejected before opening a database connection.
 - Relative, absolute, and presigned MinIO URL normalization.
 
-Result: `5 passed, 0 failed`, plus the existing subbox mapper tests.
+Result: `12 passed, 0 failed`, plus the existing subbox mapper tests.
 
 ### PostgreSQL and MinIO integration test
 
@@ -129,6 +157,8 @@ Verified results:
 - The unrelated patient and its raw object remained.
 - Raw, annotation, replaced/orphaned visit objects were removed.
 - The processed object shared by the second patient remained.
+- Deleting the final referencing patient subsequently removed the shared processed object.
+- The cleanup outbox reached `completed` with the expected deleted and preserved counts.
 - The fixture cleaned itself up after the test.
 
 Result: `1 passed, 0 failed`.
@@ -156,23 +186,34 @@ The running backend was tested through the public workflow:
 - `backend/src/services/patientDeletionService.js`
 - `backend/src/services/patientDeletionService.test.js`
 - `backend/src/services/patientDeletionService.integration.test.js`
+- `backend/src/services/storageDeletionService.js`
+- `backend/src/services/storageDeletionService.test.js`
+- `backend/src/services/processedImageReferenceService.js`
+- `backend/src/services/processedImageReferenceService.test.js`
+- `backend/src/workers/storageDeletionWorker.js`
+- `backend/src/controllers/ImageProcessingController.test.js`
 - `init-db/009_cascade_processing_jobs_on_visit_delete.sql`
+- `init-db/010_create_storage_deletion_outbox.sql`
 - `docs/delete-patient-cascade-implementation.md`
 
 ### Files updated
 
 - `backend/src/controllers/PatientController.js`
+- `backend/src/controllers/ImageProcessingController.js`
 - `backend/src/models/Patient.js`
 - `backend/src/routes/api.js`
 - `backend/src/services/storage.js`
+- `backend/src/workers/imageProcessor.js`
 - `backend/package.json`
 - `frontend/src/components/PatientList.jsx`
 - `frontend/src/services/patientService.js`
 - `frontend/src/features/patients/hooks/usePatients.js`
 - `frontend/src/features/patients/pages/PatientDetailPage.jsx`
 
-### Known transaction boundary
+### Transaction boundary after the F1 to F3 fixes
 
-PostgreSQL and MinIO cannot participate in one atomic transaction. The implementation deletes database rows inside an uncommitted transaction, deletes MinIO objects, and commits afterward. A normal MinIO failure rolls back the database. A process crash after MinIO deletion but before PostgreSQL commit remains a distributed-system edge case and would require an outbox/saga or MinIO versioning for complete recovery guarantees.
+PostgreSQL and MinIO still cannot participate in one atomic transaction, so the implementation no longer pretends that a database rollback can restore deleted objects. The patient hard delete and the cleanup manifest commit atomically in PostgreSQL. MinIO cleanup happens afterward and is idempotently retried from the durable outbox. The database therefore cannot roll back into metadata that points to objects already removed by an earlier successful batch.
+
+Content-addressed processed objects are scheduled on every relevant patient deletion, including when another patient currently references them. Cleanup takes the shared advisory lock and performs a fresh reference check. Concurrent deletions therefore cannot permanently preserve an orphan merely because both requests saw the other reference before committing.
 
 Abandoned presigned uploads that were never confirmed and are neither stored in database metadata nor placed below a visit prefix cannot be associated safely with a patient. Those objects require a separate age-based orphan cleanup process.

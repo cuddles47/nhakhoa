@@ -1,6 +1,7 @@
 const { Worker } = require('bullmq');
 const { connection } = require('../config/queue');
 const storageService = require('../services/storage');
+const { storeProcessedImageReference } = require('../services/processedImageReferenceService');
 const imageProcessingService = require('../services/imageProcessingService');
 const { Image, Annotation, Visit } = require('../models');
 const annotationService = require('../services/annotationService');
@@ -9,6 +10,10 @@ const path = require('path');
 const fs = require('fs').promises;
 const os = require('os');
 const db = require('../config/database');
+const {
+  startStorageDeletionWorker,
+  stopStorageDeletionWorker,
+} = require('./storageDeletionWorker');
 
 async function updateJobRecord(jobId, fields) {
   const sets = [];
@@ -110,33 +115,17 @@ async function processImagesJob(job) {
 
       const originalFilename = path.basename(originalImage.url);
       const processedFilename = originalFilename.replace(/^raw_/, 'processed_');
-      const processedObjectName = `visits/${visitId}/processed/${processedFilename}`;
-
       const ext = path.extname(processedFilename).replace(/^\./, '') || 'jpg';
-      const ensureResult = await storageService.ensureUploadByHash(
+      const storedImage = await storeProcessedImageReference(
+        originalImage.id,
         fileBuffer,
-        'processed_by_hash',
-        ext,
-        'image/jpeg'
+        ext
       );
-
-      if (!ensureResult.success) continue;
-
-      const urlProcessed = `/${process.env.MINIO_BUCKET}/${ensureResult.objectName}`;
-
-      try {
-        await Image.update(originalImage.id, {
-          url_processed: urlProcessed,
-          processing_status: 'completed',
-          processed_at: new Date(),
-          processed_hash: ensureResult.hash,
-        });
-      } catch (err) {
-        await Image.update(originalImage.id, {
-          url_processed: urlProcessed,
-          processing_status: 'completed',
-          processed_at: new Date(),
-        });
+      if (!storedImage.success) {
+        console.warn(
+          `Failed to store processed image reference for image ${originalImage.id}: ${storedImage.error}`
+        );
+        continue;
       }
 
       const annotationFile = `image_${imageId}.txt`;
@@ -345,6 +334,8 @@ let worker = null;
 function startWorker() {
   if (worker) return worker;
 
+  startStorageDeletionWorker();
+
   worker = new Worker('image-processing', processImagesJob, {
     connection,
     concurrency: 1,
@@ -373,10 +364,12 @@ async function stopWorker() {
     worker = null;
     console.log('Image processing worker stopped');
   }
+  await stopStorageDeletionWorker();
 }
 
 module.exports = {
   startWorker,
   stopWorker,
   processImagesJob,
+  storeProcessedImageReference,
 };
