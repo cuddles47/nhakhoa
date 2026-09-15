@@ -389,7 +389,7 @@ class ImageProcessingController {
       regionIndexMap[subbox.toothId]++;
       const bbox = [subbox.x, subbox.y, subbox.w, subbox.h];
       const area = subbox.w * subbox.h;
-      const plaqueStatus = subbox.classId === 1 ? 1 : 0; // 1 = plaque, 0 = no plaque
+      const plaqueStatus = subbox.classId === 0 ? 0 : 1; // Default=has_plaque (red), invert classId
       
       // Check if subbox already exists
       const existingSubbox = await pool.query(`
