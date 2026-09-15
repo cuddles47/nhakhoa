@@ -1180,14 +1180,14 @@ function BulkUpload() {
               <button
                 className="button"
                 onClick={handleUpload}
-                disabled={uploading || Object.keys(patientMappings).length < parsedData.length}
+                disabled={uploading}
                 style={{ 
                   flex: 1, 
                   padding: '14px', 
                   fontSize: '15px',
                   fontWeight: '600',
-                  opacity: (uploading || Object.keys(patientMappings).length < parsedData.length) ? 0.5 : 1,
-                  cursor: (uploading || Object.keys(patientMappings).length < parsedData.length) ? 'not-allowed' : 'pointer'
+                  opacity: uploading ? 0.5 : 1,
+                  cursor: uploading ? 'not-allowed' : 'pointer'
                 }}
               >
                 {uploading ? `⏳ Đang xử lý... ${uploadProgress}%` : `🚀 Xác nhận và Upload ${parsedData.length} nhóm`}

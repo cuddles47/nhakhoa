@@ -49,19 +49,19 @@ function BulkUploadYolo() {
       .replace(/[-_\s]/g, '')
 
     const positionMap = {
-      'upper_right': ['upperright', 'topright', 'trenphai', 'PCT'],
-      'upper_center': ['uppercenter', 'uppermiddle', 'topcenter', 'topmiddle', 'trengiua', 'GCT'],
-      'upper_left': ['upperleft', 'topleft', 'trentrai', 'TCT'],
-      'middle_right': ['middleright', 'centralright', 'centerright', 'giuaphai', 'P'],
-      'middle_center': ['middlecenter', 'middlemiddle', 'centralcenter', 'centralmiddle', 'center', 'giua', 'G'],
-      'middle_left': ['middleleft', 'centralleft', 'centerleft', 'giuatrai', 'T'],
-      'lower_right': ['lowerright', 'bottomright', 'duoiphai', 'PCD'],
-      'lower_center': ['lowercenter', 'lowermiddle', 'bottomcenter', 'bottommiddle', 'duoigiua', 'GCD'],
-      'lower_left': ['lowerleft', 'bottomleft', 'duoitrai', 'TCD']
+      'upper_right': ['upperright', 'topright', 'trenphai', 'pct'],
+      'upper_center': ['uppercenter', 'uppermiddle', 'topcenter', 'topmiddle', 'trengiua', 'gct'],
+      'upper_left': ['upperleft', 'topleft', 'trentrai', 'tct'],
+      'middle_right': ['middleright', 'centralright', 'centerright', 'giuaphai', 'p'],
+      'middle_center': ['middlecenter', 'middlemiddle', 'centralcenter', 'centralmiddle', 'center', 'giua', 'g'],
+      'middle_left': ['middleleft', 'centralleft', 'centerleft', 'giuatrai', 't'],
+      'lower_right': ['lowerright', 'bottomright', 'duoiphai', 'pcd'],
+      'lower_center': ['lowercenter', 'lowermiddle', 'bottomcenter', 'bottommiddle', 'duoigiua', 'gcd'],
+      'lower_left': ['lowerleft', 'bottomleft', 'duoitrai', 'tcd']
     }
 
     for (const [standardType, variants] of Object.entries(positionMap)) {
-      if (variants.some(v => normalized === v || normalized.includes(v) || v.includes(normalized))) {
+      if (variants.some(v => normalized === v)) {
         return standardType
       }
     }
