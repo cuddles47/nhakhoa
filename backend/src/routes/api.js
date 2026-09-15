@@ -51,7 +51,7 @@ router.get('/api/patients/search', patientController.searchPatients);
 router.get('/api/patients/:id', patientController.getPatientById);
 router.post('/api/patients', validate(patientSchemas.create), patientController.createPatient);
 router.put('/api/patients/:id', validate(patientSchemas.update), patientController.updatePatient);
-router.delete('/api/patients/:id', patientController.deletePatient);
+router.delete('/api/patients/:id', authenticate, patientController.deletePatient);
 
 // Visit routes
 router.get('/api/visits', visitController.getAllVisits);

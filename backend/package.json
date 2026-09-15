@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "test:unit": "node src/services/subboxMapper.test.js"
+    "test:unit": "node src/services/subboxMapper.test.js && node --test src/services/patientDeletionService.test.js"
   },
   "dependencies": {
     "adm-zip": "^0.5.16",
