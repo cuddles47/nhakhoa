@@ -2,9 +2,9 @@
 
 ## Branch
 
-`feature/detele-patient`
+`feature/delete-patient`, based on `origin/dev` (`aa93d0e`).
 
-The requested branch name contained a space, which Git does not allow. It was normalized to the name above while preserving the requested `detele` spelling.
+The branch restores only the BullMQ components required by this feature. Unrelated changes from the old pre-revert implementation were not brought into the branch.
 
 ## 1. Problem
 
@@ -80,6 +80,7 @@ The delete route now requires authentication because it permanently removes clin
 For an existing database volume, apply it explicitly:
 
 ```powershell
+docker exec -i nhakhoa-postgres psql -v ON_ERROR_STOP=1 -U postgres -d dental_db -f /docker-entrypoint-initdb.d/008_add_processing_jobs.sql
 docker exec -i nhakhoa-postgres psql -v ON_ERROR_STOP=1 -U postgres -d dental_db -f /docker-entrypoint-initdb.d/009_cascade_processing_jobs_on_visit_delete.sql
 docker exec -i nhakhoa-postgres psql -v ON_ERROR_STOP=1 -U postgres -d dental_db -f /docker-entrypoint-initdb.d/010_create_storage_deletion_outbox.sql
 ```
@@ -140,7 +141,7 @@ Passed scenarios:
 - Invalid patient ID rejected before opening a database connection.
 - Relative, absolute, and presigned MinIO URL normalization.
 
-Result: `12 passed, 0 failed`, plus the existing subbox mapper tests.
+Result on the branch based on `origin/dev`: `npm run test:unit` passed `12/12`, plus the existing subbox mapper checks. Full test discovery passed `15`, failed `0`, and skipped the one environment-gated integration test; that integration test was then enabled and run separately as described below.
 
 ### PostgreSQL and MinIO integration test
 
@@ -149,9 +150,9 @@ $env:RUN_PATIENT_DELETE_INTEGRATION='true'
 node --test src/services/patientDeletionService.integration.test.js
 ```
 
-The fixture created two patients and populated cases, case-doctors, visits, images, parent/child annotations, annotation history, subboxes, labels, validations, a processing job, visit-prefixed MinIO objects, and a processed object shared between both patients.
+The fixture creates two patients and populates cases, case-doctors, visits, images, parent/child annotations, annotation history, subboxes, labels, validations, a processing job, visit-prefixed MinIO objects, and a processed object shared between both patients.
 
-Verified results:
+After porting to `origin/dev`, the integration test was run again against local PostgreSQL and MinIO. It verifies:
 
 - Every target database row was removed through the cascade.
 - The unrelated patient and its raw object remained.
@@ -161,7 +162,7 @@ Verified results:
 - The cleanup outbox reached `completed` with the expected deleted and preserved counts.
 - The fixture cleaned itself up after the test.
 
-Result: `1 passed, 0 failed`.
+Current port result: `1 passed, 0 failed`.
 
 ### HTTP verification
 
@@ -176,13 +177,18 @@ The running backend was tested through the public workflow:
 
 - Backend syntax checks passed.
 - `git diff --check` passed.
-- Frontend production build passed with 159 modules transformed.
-- Live database constraint reports `processing_jobs_visit_id_fkey: CASCADE`.
+- Frontend production build passed with 160 modules transformed.
+- `docker compose config --quiet` passed.
+- Live database verification passed: `processing_jobs` and `storage_deletion_jobs` exist, and `processing_jobs_visit_id_fkey` reports `ON DELETE CASCADE`.
+- Redis/BullMQ smoke test passed by enqueueing, reading, removing, and cleaning an isolated queue job.
+- Backend startup connected successfully to local PostgreSQL, MinIO, and Redis; both workers started and graceful shutdown closed the worker, database pool, Redis connection, and HTTP server.
+- HTTP smoke tests returned `401` without authentication, `404 PATIENT_NOT_FOUND` for an authenticated missing patient, and `200` for an authenticated disposable patient fixture; the fixture row was confirmed deleted.
 
 ## 5. Review of changes
 
 ### Files added
 
+- `backend/src/config/queue.js`
 - `backend/src/services/patientDeletionService.js`
 - `backend/src/services/patientDeletionService.test.js`
 - `backend/src/services/patientDeletionService.integration.test.js`
@@ -191,22 +197,28 @@ The running backend was tested through the public workflow:
 - `backend/src/services/processedImageReferenceService.js`
 - `backend/src/services/processedImageReferenceService.test.js`
 - `backend/src/workers/storageDeletionWorker.js`
+- `backend/src/workers/imageProcessor.js`
 - `backend/src/controllers/ImageProcessingController.test.js`
+- `init-db/008_add_processing_jobs.sql`
 - `init-db/009_cascade_processing_jobs_on_visit_delete.sql`
 - `init-db/010_create_storage_deletion_outbox.sql`
 - `docs/delete-patient-cascade-implementation.md`
 
 ### Files updated
 
+- `backend/package-lock.json`
+- `backend/package.json`
 - `backend/src/controllers/PatientController.js`
 - `backend/src/controllers/ImageProcessingController.js`
 - `backend/src/models/Patient.js`
 - `backend/src/routes/api.js`
+- `backend/src/server.js`
 - `backend/src/services/storage.js`
-- `backend/src/workers/imageProcessor.js`
-- `backend/package.json`
+- `docker-compose.yml`
+- `frontend/src/components/ImageUpload.jsx`
 - `frontend/src/components/PatientList.jsx`
 - `frontend/src/services/patientService.js`
+- `frontend/src/services/imageService.js`
 - `frontend/src/features/patients/hooks/usePatients.js`
 - `frontend/src/features/patients/pages/PatientDetailPage.jsx`
 

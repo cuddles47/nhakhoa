@@ -179,9 +179,9 @@ class ImageProcessingController {
       const { visitId } = req.params;
 
       const latestJobResult = await database.query(
-        `SELECT * FROM processing_jobs 
-         WHERE visit_id = $1 
-         ORDER BY created_at DESC 
+        `SELECT * FROM processing_jobs
+         WHERE visit_id = $1
+         ORDER BY created_at DESC
          LIMIT 1`,
         [visitId]
       );

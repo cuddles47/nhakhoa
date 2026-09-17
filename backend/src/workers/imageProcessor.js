@@ -220,9 +220,9 @@ async function parseAndSaveSubboxes(
   const scaleY = originalHeight / processedHeight;
 
   const teethResult = await db.query(
-    `SELECT id, category_id, category_name, bbox, coco_image_id 
-     FROM image_annotations 
-     WHERE image_id = $1 
+    `SELECT id, category_id, category_name, bbox, coco_image_id
+     FROM image_annotations
+     WHERE image_id = $1
        AND parent_annotation_id IS NULL
        AND LOWER(category_name) NOT IN ('brace', 'bracket')
      ORDER BY id`,
@@ -294,7 +294,7 @@ async function parseAndSaveSubboxes(
     const plaqueStatus = subbox.classId === 0 ? 0 : 1;
 
     const existingSubbox = await db.query(
-      `SELECT id FROM image_annotations 
+      `SELECT id FROM image_annotations
        WHERE image_id = $1 AND parent_annotation_id = $2 AND subbox_region = $3`,
       [imageId, parentId, region]
     );
