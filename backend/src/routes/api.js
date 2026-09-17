@@ -83,8 +83,8 @@ router.get('/api/visits/:visitId/stained-upload-status', bulkUploadController.ge
 router.get('/api/patients/:patientId/available-visits', bulkUploadController.getAvailableVisitsForStained);
 
 // Image processing routes
-router.post('/api/visits/:visitId/process-images', imageProcessingController.processRawImages);
-router.get('/api/visits/:visitId/processing-status', imageProcessingController.getProcessingStatus);
+router.post('/api/visits/:visitId/process-images', authenticate, imageProcessingController.processRawImages);
+router.get('/api/visits/:visitId/processing-status', authenticate, imageProcessingController.getProcessingStatus);
 
 // Annotation routes
 router.get('/api/images/:imageId/annotations', annotationController.getImageAnnotations);
