@@ -300,13 +300,13 @@ class ImageProcessingController {
     const scaleY = originalHeight / processedHeight;
     
     // Get all parent teeth from database (sorted by id for consistent ordering)
-    // IMPORTANT: Exclude Brace/bracket annotations - Python service only processes teeth
+    // Python service already excludes brackets (class 26) when creating subboxes,
+    // so we don't need to filter by category_name here
     const teethResult = await pool.query(`
       SELECT id, category_id, category_name, bbox, coco_image_id 
       FROM image_annotations 
       WHERE image_id = $1 
         AND parent_annotation_id IS NULL
-        AND LOWER(category_name) NOT IN ('brace', 'bracket')
       ORDER BY id
     `, [imageId]);
     

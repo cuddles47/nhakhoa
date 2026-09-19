@@ -420,6 +420,7 @@ function StainedBulkUpload() {
         group.selectedVisitId = 'new';
         group.visit = null;
         group.needsVisitCreation = true;
+        group.warning = `Sẽ tạo lần khám mới ngày ${formatDateDisplay(group.newVisitDate)}`;
       } else {
         const visitId = parseInt(value, 10);
         const selectedVisit = group.availableVisits?.find(v => v.id === visitId);
@@ -427,6 +428,12 @@ function StainedBulkUpload() {
         group.visit = selectedVisit || null;
         group.status = selectedVisit?.status || null;
         group.needsVisitCreation = false;
+        
+        if (selectedVisit?.status?.hasRawImages) {
+          group.warning = null;
+        } else {
+          group.warning = 'Lần khám chưa có ảnh RAW';
+        }
       }
       
       updated[groupIndex] = group;
@@ -439,6 +446,7 @@ function StainedBulkUpload() {
       const updated = [...prev];
       const group = { ...updated[groupIndex] };
       group.newVisitDate = dateValue;
+      group.warning = `Sẽ tạo lần khám mới ngày ${formatDateDisplay(dateValue)}`;
       updated[groupIndex] = group;
       return updated;
     });
