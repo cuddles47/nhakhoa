@@ -526,7 +526,7 @@ function convertYOLOToPixels(yoloAnnotations, imageWidth, imageHeight) {
       category_name: getCategoryName(toothClassId),
       bbox: [x, y, w, h],
       area: w * h,
-      plaque_status: ann.class_id === 0 ? 1 : 0, // Default=has_plaque (red), invert YOLO class_id
+      plaque_status: null, // Parent teeth don't have plaque_status
       tooth_id: ann.tooth_id != null && ann.tooth_id > 0 ? ann.tooth_id : null // null=parent teeth, >0=subbox of that tooth
     };
   });

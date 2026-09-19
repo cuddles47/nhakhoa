@@ -9,7 +9,7 @@ class ImageService {
    * Get all images for a visit
    */
   async getVisitImages(visitId, category = null) {
-    const response = await apiClient.get(`/images/visit/${visitId}`, {
+    const response = await apiClient.get(`/api/visits/${visitId}/images`, {
       params: { category }
     });
     return response.data;
@@ -28,7 +28,7 @@ class ImageService {
       formData.append('notes', imageData.notes);
     }
 
-    const response = await apiClient.post(`/images/${visitId}/upload`, formData, {
+    const response = await apiClient.post(`/api/images`, formData, {
       headers: {
         'Content-Type': 'multipart/form-data'
       }
@@ -40,7 +40,7 @@ class ImageService {
    * Update image validation status
    */
   async updateValidationStatus(imageId, status) {
-    const response = await apiClient.put(`/images/${imageId}/validation`, {
+    const response = await apiClient.put(`/api/images/${imageId}/validation`, {
       validation_status: status
     });
     return response.data;
@@ -50,7 +50,7 @@ class ImageService {
    * Delete image (soft delete)
    */
   async deleteImage(imageId) {
-    const response = await apiClient.delete(`/images/${imageId}`);
+    const response = await apiClient.delete(`/api/images/${imageId}`);
     return response.data;
   }
 
@@ -58,7 +58,7 @@ class ImageService {
    * Bulk upload images
    */
   async bulkUpload(formData) {
-    const response = await apiClient.post('/bulk-upload', formData, {
+    const response = await apiClient.post('/api/bulk-upload', formData, {
       headers: {
         'Content-Type': 'multipart/form-data'
       }
@@ -70,7 +70,7 @@ class ImageService {
    * Get bulk upload history
    */
   async getBulkUploadHistory() {
-    const response = await apiClient.get('/bulk-upload/history');
+    const response = await apiClient.get('/api/bulk-upload/history');
     return response.data;
   }
 

@@ -822,7 +822,7 @@ class BulkUploadController {
         try {
             let visitId = req.body.visitId;
             const patientId = req.body.patientId;
-            const visitDate = req.body.visitDate;
+            const visitDate = req.body.visitDate || new Date().toISOString().split('T')[0];
             
             // If visitId not provided, try to find or create visit
             if (!visitId && patientId && visitDate) {
@@ -1140,6 +1140,63 @@ class BulkUploadController {
                 return res.status(400).json({ success: false, error: 'No YOLO label files uploaded' });
             }
 
+            // Create job record for async processing
+            const jobId = `yolo_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+            await client.query('BEGIN');
+            
+            const jobResult = await client.query(`
+                INSERT INTO upload_jobs (job_id, status, total_images, metadata, created_at)
+                VALUES ($1, $2, $3, $4, NOW())
+                RETURNING *
+            `, [jobId, 'processing', imageFiles.length, JSON.stringify(metadata)]);
+            
+            await client.query('COMMIT');
+
+            // Return immediately with job ID
+            res.status(202).json({
+                success: true,
+                message: 'Upload đã được tiếp nhận, đang xử lý bất đồng bộ',
+                data: {
+                    jobId,
+                    status: 'processing',
+                    totalImages: imageFiles.length
+                }
+            });
+
+            // Process in background
+            this._processYoloUploadAsync(jobId, imageFiles, yoloLabelFiles, metadata, extractedDir)
+                .catch(err => {
+                    console.error(`[YOLO Upload] Fatal error in async job ${jobId}:`, err);
+                });
+
+        } catch (error) {
+            await client.query('ROLLBACK');
+            console.error('YOLO Bulk upload error:', error);
+
+            let errorMessage = 'YOLO Upload thất bại';
+            if (error.message.includes('annotation')) {
+                errorMessage = `Lỗi xử lý annotations: ${error.message}`;
+            } else if (error.message.includes('patient')) {
+                errorMessage = `Lỗi tạo bệnh nhân: ${error.message}`;
+            } else if (error.message.includes('visit')) {
+                errorMessage = `Lỗi tạo lần khám: ${error.message}`;
+            } else if (error.message.includes('upload') || error.message.includes('storage')) {
+                errorMessage = `Lỗi upload ảnh: ${error.message}`;
+            } else {
+                errorMessage = error.message || 'Lỗi không xác định';
+            }
+
+            res.status(500).json({ success: false, error: errorMessage });
+        } finally {
+            client.release();
+        }
+    }
+
+    async _processYoloUploadAsync(jobId, imageFiles, yoloLabelFiles, metadata, extractedDir) {
+        const { pool } = require('../config/database');
+        const client = await pool.connect();
+
+        try {
             // Build label file map: baseName → buffer
             const labelFileMap = {};
             for (const lf of yoloLabelFiles) {
@@ -1147,7 +1204,6 @@ class BulkUploadController {
                 labelFileMap[baseName] = lf.buffer;
             }
 
-            // Start transaction
             await client.query('BEGIN');
 
             let patientsCreated = 0;
@@ -1334,73 +1390,54 @@ class BulkUploadController {
                     } else {
                         imagesWithoutAnnotations.push(file.originalname);
                     }
+
+                    // Update job progress
+                    await client.query(`
+                        UPDATE upload_jobs 
+                        SET processed_images = $1, updated_at = NOW()
+                        WHERE job_id = $2
+                    `, [imagesCreated, jobId]);
                 }
             }
 
-            // Commit transaction
+            // Mark job as completed
+            await client.query(`
+                UPDATE upload_jobs 
+                SET status = 'completed', 
+                    patients_created = $1,
+                    visits_created = $2,
+                    images_created = $3,
+                    annotations_created = $4,
+                    completed_at = NOW(),
+                    updated_at = NOW()
+                WHERE job_id = $5
+            `, [patientsCreated, visitsCreated, imagesCreated, annotationsCreated, jobId]);
+
             await client.query('COMMIT');
 
-            // Build response
-            const summaryParts = [];
-            if (patientsCreated > 0) summaryParts.push(`${patientsCreated} bệnh nhân mới`);
-            if (visitsCreated > 0) summaryParts.push(`${visitsCreated} lần khám`);
-            if (imagesCreated > 0) summaryParts.push(`${imagesCreated} ảnh`);
-            if (annotationsCreated > 0) summaryParts.push(`${annotationsCreated} annotations`);
-
-            const patientSummary = createdPatients.map((patient, idx) => ({
-                id: patient.id,
-                name: patient.name,
-                patientId: metadata[idx]?.patientId,
-                imagesCount: createdVisits[idx] ?
-                    createdImages.filter(img => img.visit_id === createdVisits[idx].id).length : 0
-            }));
-
-            res.status(201).json({
-                success: true,
-                message: `YOLO Upload thành công: ${summaryParts.join(', ')}`,
-                data: {
-                    patientsCreated,
-                    visitsCreated,
-                    imagesCreated,
-                    annotationsCreated,
-                    imagesWithoutAnnotations: imagesWithoutAnnotations.length > 0 ? imagesWithoutAnnotations : undefined,
-                    patientSummary,
-                    patients: createdPatients,
-                    visits: createdVisits,
-                    images: createdImages
-                }
-            });
+            console.log(`[YOLO Upload] Job ${jobId} completed: ${patientsCreated} patients, ${visitsCreated} visits, ${imagesCreated} images, ${annotationsCreated} annotations`);
 
         } catch (error) {
             await client.query('ROLLBACK');
-            console.error('YOLO Bulk upload error:', error);
-
-            let errorMessage = 'YOLO Upload thất bại';
-            if (error.message.includes('annotation')) {
-                errorMessage = `Lỗi xử lý annotations: ${error.message}`;
-            } else if (error.message.includes('patient')) {
-                errorMessage = `Lỗi tạo bệnh nhân: ${error.message}`;
-            } else if (error.message.includes('visit')) {
-                errorMessage = `Lỗi tạo lần khám: ${error.message}`;
-            } else if (error.message.includes('upload') || error.message.includes('storage')) {
-                errorMessage = `Lỗi upload ảnh: ${error.message}`;
-            } else {
-                errorMessage = error.message || 'Lỗi không xác định';
-            }
-
-            res.status(500).json({ success: false, error: errorMessage });
+            console.error(`[YOLO Upload] Job ${jobId} failed:`, error);
+            
+            await client.query(`
+                UPDATE upload_jobs 
+                SET status = 'failed', error_message = $1, updated_at = NOW()
+                WHERE job_id = $2
+            `, [error.message, jobId]);
         } finally {
+            client.release();
+            
             // Cleanup extracted files
             try {
-                if (typeof extractedDir !== 'undefined' && extractedDir) {
+                if (extractedDir) {
                     await cleanupDir(extractedDir);
                     console.log('Cleaned up extracted dir:', extractedDir);
                 }
             } catch (cleanupErr) {
                 console.warn('Error cleaning up extracted files:', cleanupErr.message);
             }
-
-            client.release();
         }
     }
 
@@ -1448,6 +1485,48 @@ class BulkUploadController {
             });
         }
     }
+
+    async getUploadJobStatus(req, res) {
+        try {
+            const { jobId } = req.params;
+            const { pool } = require('../config/database');
+            
+            const result = await pool.query(`
+                SELECT * FROM upload_jobs WHERE job_id = $1
+            `, [jobId]);
+            
+            if (result.rows.length === 0) {
+                return res.status(404).json({ 
+                    success: false, 
+                    error: 'Job not found' 
+                });
+            }
+            
+            const job = result.rows[0];
+            res.json({
+                success: true,
+                data: {
+                    jobId: job.job_id,
+                    status: job.status,
+                    totalImages: job.total_images,
+                    processedImages: job.processed_images,
+                    patientsCreated: job.patients_created,
+                    visitsCreated: job.visits_created,
+                    imagesCreated: job.images_created,
+                    annotationsCreated: job.annotations_created,
+                    errorMessage: job.error_message,
+                    createdAt: job.created_at,
+                    completedAt: job.completed_at
+                }
+            });
+        } catch (error) {
+            console.error('Get upload job status error:', error);
+            res.status(500).json({ 
+                success: false, 
+                error: error.message 
+            });
+        }
+    }
 }
 
 // Export all methods including YOLO upload
@@ -1460,5 +1539,6 @@ module.exports = {
     generatePresignedUrls: controller.generatePresignedUrls.bind(controller),
     uploadStainedImages: controller.uploadStainedImages.bind(controller),
     getStainedUploadStatus: controller.getStainedUploadStatus.bind(controller),
-    getAvailableVisitsForStained: controller.getAvailableVisitsForStained.bind(controller)
+    getAvailableVisitsForStained: controller.getAvailableVisitsForStained.bind(controller),
+    getUploadJobStatus: controller.getUploadJobStatus.bind(controller)
 };

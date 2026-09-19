@@ -128,8 +128,7 @@ const ProcessedImageViewer = ({
       formData.append('imageId', lightboxImage.imageId);
       formData.append('rotation', rotation);
 
-      const API_URL = import.meta.env.VITE_API_URL || 'http://100.93.48.110:3001';
-      const response = await fetch(`${API_URL}/api/images/${lightboxImage.imageId}/rotate`, {
+      const response = await fetch(`/api/images/${lightboxImage.imageId}/rotate`, {
         method: 'POST',
         body: formData,
         credentials: 'include'

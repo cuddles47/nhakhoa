@@ -9,7 +9,7 @@ class PatientService {
    * Get paginated list of patients
    */
   async getPatients({ page = 1, limit = 10, search = '', sortBy = 'created_at', sortOrder = 'desc' }) {
-    const response = await apiClient.get('/patients', {
+    const response = await apiClient.get('/api/patients', {
       params: { page, limit, search, sortBy, sortOrder }
     });
     return response.data;
@@ -19,7 +19,7 @@ class PatientService {
    * Get single patient by ID
    */
   async getPatient(id) {
-    const response = await apiClient.get(`/patients/${id}`);
+    const response = await apiClient.get(`/api/patients/${id}`);
     return response.data;
   }
 
@@ -27,7 +27,7 @@ class PatientService {
    * Search patients by name or phone
    */
   async searchPatients(query) {
-    const response = await apiClient.get('/patients/search', {
+    const response = await apiClient.get('/api/patients/search', {
       params: { q: query }
     });
     return response.data;
@@ -37,7 +37,7 @@ class PatientService {
    * Create new patient
    */
   async createPatient(patientData) {
-    const response = await apiClient.post('/patients', patientData);
+    const response = await apiClient.post('/api/patients', patientData);
     return response.data;
   }
 
@@ -45,7 +45,7 @@ class PatientService {
    * Update patient
    */
   async updatePatient(id, patientData) {
-    const response = await apiClient.put(`/patients/${id}`, patientData);
+    const response = await apiClient.put(`/api/patients/${id}`, patientData);
     return response.data;
   }
 
@@ -53,7 +53,7 @@ class PatientService {
    * Delete patient (soft delete)
    */
   async deletePatient(id) {
-    const response = await apiClient.delete(`/patients/${id}`);
+    const response = await apiClient.delete(`/api/patients/${id}`);
     return response.data;
   }
 }

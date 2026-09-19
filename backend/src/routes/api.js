@@ -76,6 +76,7 @@ router.get('/api/bulk-upload/history', bulkUploadController.getUploadHistory);
 
 // Bulk upload routes (YOLO format - new)
 router.post('/api/bulk-upload-yolo', upload.any(), bulkUploadController.bulkUploadYolo);
+router.get('/api/bulk-upload-yolo/status/:jobId', bulkUploadController.getUploadJobStatus);
 
 // Stained bulk upload routes
 router.post('/api/bulk-upload/stained', upload.array('images', 20), bulkUploadController.uploadStainedImages);

@@ -6,7 +6,7 @@ const annotationService = {
    */
   async getImageAnnotations(imageId) {
     try {
-      const response = await apiClient.get(`api/images/${imageId}/annotations`);
+      const response = await apiClient.get(`/api/images/${imageId}/annotations`);
       return response.data;
     } catch (error) {
       console.error('Error getting image annotations:', error);
@@ -19,7 +19,7 @@ const annotationService = {
    */
   async updatePlaqueStatus(annotationId, plaqueStatus, userId) {
     try {
-      const response = await apiClient.put(`api/annotations/${annotationId}/plaque`, {
+      const response = await apiClient.put(`/api/annotations/${annotationId}/plaque`, {
         plaque_status: plaqueStatus,
         user_id: userId
       });
@@ -35,7 +35,7 @@ const annotationService = {
    */
   async batchUpdateAnnotations(imageId, annotations, userId) {
     try {
-      const response = await apiClient.post(`api/images/${imageId}/annotations/batch`, {
+      const response = await apiClient.post(`/api/images/${imageId}/annotations/batch`, {
         annotations,
         user_id: userId
       });
@@ -51,7 +51,7 @@ const annotationService = {
    */
   async getVisitStats(visitId) {
     try {
-      const response = await apiClient.get(`api/visits/${visitId}/annotations/stats`);
+      const response = await apiClient.get(`/api/visits/${visitId}/annotations/stats`);
       return response.data;
     } catch (error) {
       console.error('Error getting visit stats:', error);

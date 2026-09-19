@@ -17,7 +17,7 @@ class AuthService {
    * Get current user profile
    */
   async getProfile() {
-    const response = await apiClient.get('/auth/profile');
+    const response = await apiClient.get('/api/auth/profile');
     return response.data;
   }
 

@@ -17,7 +17,7 @@ export default defineConfig(({ mode }) => {
       },
       proxy: {
         '/api': {
-          target: 'http://100.85.22.67:3000',
+          target: env.VITE_PROXY_TARGET || 'http://localhost:3000',
           changeOrigin: true,
           timeout: 300000,
           proxyTimeout: 300000,
@@ -40,7 +40,7 @@ export default defineConfig(({ mode }) => {
       },
       proxy: {
         '/api': {
-          target: 'http://100.85.22.67:3000',
+          target: process.env.VITE_PROXY_TARGET || 'http://backend:3000',
           changeOrigin: true,
           timeout: 300000,
           proxyTimeout: 300000

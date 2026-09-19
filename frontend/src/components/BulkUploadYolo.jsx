@@ -438,40 +438,50 @@ function BulkUploadYolo() {
 
       const resultData = response.data.data
 
-      toast.dismiss('yolo-upload')
-      toast.success(
-        `✓ Upload thành công!\n` +
-        `Bệnh nhân: ${resultData.patientsCreated} mới, ` +
-        `Lần khám: ${resultData.visitsCreated}, ` +
-        `Ảnh: ${resultData.imagesCreated}, ` +
-        `Annotations: ${resultData.annotationsCreated || 0}`,
-        { duration: 5000 }
-      )
+      // Check if this is an async job (202 response)
+      if (response.status === 202 && resultData.jobId) {
+        toast.dismiss('yolo-upload')
+        toast.success(`✓ Upload đã được tiếp nhận! Đang xử lý ${resultData.totalImages} ảnh...`, { duration: 3000 })
+        
+        // Poll for job status
+        await pollJobStatus(resultData.jobId)
+      } else {
+        // Legacy sync response
+        toast.dismiss('yolo-upload')
+        toast.success(
+          `✓ Upload thành công!\n` +
+          `Bệnh nhân: ${resultData.patientsCreated} mới, ` +
+          `Lần khám: ${resultData.visitsCreated}, ` +
+          `Ảnh: ${resultData.imagesCreated}, ` +
+          `Annotations: ${resultData.annotationsCreated || 0}`,
+          { duration: 5000 }
+        )
 
-      if (resultData.imagesWithoutAnnotations && resultData.imagesWithoutAnnotations.length > 0) {
-        toast(`⚠️ ${resultData.imagesWithoutAnnotations.length} ảnh không có label`, {
-          duration: 3000,
-          icon: '⚠️',
-          style: {
-            background: '#fff3cd',
-            color: '#856404',
-            border: '1px solid #ffc107'
-          }
-        })
+        if (resultData.imagesWithoutAnnotations && resultData.imagesWithoutAnnotations.length > 0) {
+          toast(`⚠️ ${resultData.imagesWithoutAnnotations.length} ảnh không có label`, {
+            duration: 3000,
+            icon: '⚠️',
+            style: {
+              background: '#fff3cd',
+              color: '#856404',
+              border: '1px solid #ffc107'
+            }
+          })
+        }
+
+        setUploadResult({ success: true, data: resultData })
+
+        // Clear after success
+        setFiles([])
+        setLabelFiles([])
+        setLabelPreview(null)
+        setParsedData([])
+        setPatientMappings({})
+
+        setTimeout(() => {
+          navigate('/patients')
+        }, 2000)
       }
-
-      setUploadResult({ success: true, data: resultData })
-
-      // Clear after success
-      setFiles([])
-      setLabelFiles([])
-      setLabelPreview(null)
-      setParsedData([])
-      setPatientMappings({})
-
-      setTimeout(() => {
-        navigate('/patients')
-      }, 2000)
 
     } catch (error) {
       console.error('Upload error:', error)
@@ -492,6 +502,75 @@ function BulkUploadYolo() {
       setUploading(false)
       setUploadProgress(0)
     }
+  }
+
+  const pollJobStatus = async (jobId) => {
+    const maxAttempts = 120 // 2 minutes max (120 * 1s)
+    let attempts = 0
+    
+    const poll = async () => {
+      try {
+        attempts++
+        const response = await fetch(`/api/bulk-upload-yolo/status/${jobId}`)
+        const data = await response.json()
+        
+        if (!data.success) {
+          throw new Error(data.error || 'Failed to get job status')
+        }
+        
+        const job = data.data
+        const progress = job.totalImages > 0 ? Math.round((job.processedImages / job.totalImages) * 100) : 0
+        
+        setUploadProgress(progress)
+        toast.loading(`⏳ Đang xử lý: ${job.processedImages}/${job.totalImages} ảnh (${progress}%)...`, { id: 'yolo-upload' })
+        
+        if (job.status === 'completed') {
+          toast.dismiss('yolo-upload')
+          toast.success(
+            `✓ Upload thành công!\n` +
+            `Bệnh nhân: ${job.patientsCreated} mới, ` +
+            `Lần khám: ${job.visitsCreated}, ` +
+            `Ảnh: ${job.imagesCreated}, ` +
+            `Annotations: ${job.annotationsCreated || 0}`,
+            { duration: 5000 }
+          )
+          
+          setUploadResult({ success: true, data: job })
+          
+          // Clear after success
+          setFiles([])
+          setLabelFiles([])
+          setLabelPreview(null)
+          setParsedData([])
+          setPatientMappings({})
+          
+          setTimeout(() => {
+            navigate('/patients')
+          }, 2000)
+          
+          return
+        }
+        
+        if (job.status === 'failed') {
+          throw new Error(job.errorMessage || 'Upload failed')
+        }
+        
+        if (attempts >= maxAttempts) {
+          throw new Error('Upload timeout - job vẫn đang xử lý')
+        }
+        
+        // Poll again after 1 second
+        setTimeout(poll, 1000)
+        
+      } catch (error) {
+        console.error('Poll error:', error)
+        toast.dismiss('yolo-upload')
+        toast.error(`❌ Upload thất bại: ${error.message}`, { duration: 10000 })
+        setUploadResult({ success: false, error: error.message })
+      }
+    }
+    
+    await poll()
   }
 
   const handleClear = () => {
