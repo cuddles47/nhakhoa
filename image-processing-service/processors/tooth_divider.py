@@ -12,7 +12,8 @@ from utils.yolo_helper import (
     pixel_to_yolo,
     read_yolo_annotation,
     write_yolo_annotation,
-    get_iou_containment
+    get_iou_containment,
+    get_iou_overlap
 )
 
 
@@ -31,20 +32,25 @@ class ToothDivider:
     PADDING_PX = 10  # Số pixel mở rộng cho khung răng khi vẽ
     BBOX_THICKNESS = 10  # Độ dày viền bounding box
     
-    def __init__(self, bracket_class=21, padding_px=10):
+    def __init__(self, bracket_class=21, padding_px=10, iou_threshold=0.1):
         """
         Khởi tạo ToothDivider
         
         Args:
             bracket_class: ID class của mắc cài (mặc định 13)
             padding_px: Số pixel mở rộng cho khung răng (mặc định 10)
+            iou_threshold: Ngưỡng IoU tối thiểu để match bracket (mặc định 0.1)
         """
         self.bracket_class = bracket_class
         self.padding_px = padding_px
+        self.iou_threshold = iou_threshold
     
     def _find_matching_bracket(self, brackets: List[Tuple], tooth_box: Tuple) -> Tuple:
         """
-        Tìm mắc cài nằm trong răng
+        Tìm mắc cài nằm trong răng (2-tier matching)
+        
+        Tier 1: Center containment - tâm bracket nằm strictly trong tooth box
+        Tier 2: IoU overlap > threshold - fallback nếu tier 1 fail
         
         Args:
             brackets: danh sách tọa độ các mắc cài
@@ -56,6 +62,18 @@ class ToothDivider:
         for bracket_box in brackets:
             if get_iou_containment(bracket_box, tooth_box):
                 return bracket_box
+        
+        best_bracket = None
+        best_iou = 0.0
+        for bracket_box in brackets:
+            iou = get_iou_overlap(bracket_box, tooth_box)
+            if iou > best_iou:
+                best_iou = iou
+                best_bracket = bracket_box
+        
+        if best_bracket and best_iou > self.iou_threshold:
+            return best_bracket
+        
         return None
     
     def _create_four_regions(self, tooth_box: Tuple, bracket_box: Tuple) -> Dict:
@@ -188,8 +206,12 @@ class ToothDivider:
             else:
                 teeth.append({'coords': coords, 'id': cls})
         
+        filename = os.path.basename(img_path)
+        print(f"[{filename}] Phát hiện {len(teeth)} răng, {len(brackets)} brackets")
+        
         # 3. Xử lý từng răng
         new_labels = []
+        matched_count = 0
         
         for tooth in teeth:
             t_box = tooth['coords']
@@ -203,6 +225,7 @@ class ToothDivider:
             matching_bracket = self._find_matching_bracket(brackets, t_box)
             
             if matching_bracket:
+                matched_count += 1
                 # Tạo 4 vùng
                 regions = self._create_four_regions(t_box, matching_bracket)
                 
@@ -213,6 +236,22 @@ class ToothDivider:
                 
                 # Thêm annotations của 4 vùng
                 new_labels.extend(region_annotations)
+            else:
+                closest_bracket = None
+                closest_iou = 0.0
+                for bracket_box in brackets:
+                    iou = get_iou_overlap(bracket_box, t_box)
+                    if iou > closest_iou:
+                        closest_iou = iou
+                        closest_bracket = bracket_box
+                
+                if closest_bracket:
+                    print(f"  ⚠️ Răng class {t_id} tại {t_box} KHÔNG match bracket nào. "
+                          f"Bracket gần nhất: {closest_bracket}, IoU={closest_iou:.3f}")
+                else:
+                    print(f"  ⚠️ Răng class {t_id} tại {t_box} KHÔNG match - không có bracket nào")
+        
+        print(f"[{filename}] Kết quả: {matched_count}/{len(teeth)} răng có subbox ({matched_count * 4} subboxes)")
         
         # 4. Lưu kết quả nếu có đường dẫn output
         if output_img_path:

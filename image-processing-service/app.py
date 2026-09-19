@@ -37,7 +37,8 @@ app.add_middleware(
 # Khởi tạo processors
 tooth_divider = ToothDivider(
     bracket_class=Config.BRACKET_CLASS,
-    padding_px=Config.PADDING_PX
+    padding_px=Config.PADDING_PX,
+    iou_threshold=Config.BRACKET_IOU_THRESHOLD
 )
 data_augmenter = DataAugmenter()
 

@@ -20,6 +20,7 @@ class Config:
     # Tooth divider config
     BRACKET_CLASS = int(os.getenv('BRACKET_CLASS', 26))
     PADDING_PX = int(os.getenv('PADDING_PX', 10))
+    BRACKET_IOU_THRESHOLD = float(os.getenv('BRACKET_IOU_THRESHOLD', 0.1))
     
     # Augmentation config
     AUGMENTATIONS = ['rotate_left', 'rotate_right', 'flip', 'brightness_up', 'brightness_down']
