@@ -18,8 +18,7 @@ class Config:
     ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'bmp'}
     
     # Tooth divider config
-    # YOLO class mapping: Teeth 0-19, Brace 21
-    BRACKET_CLASS = int(os.getenv('BRACKET_CLASS', 21))
+    BRACKET_CLASS = int(os.getenv('BRACKET_CLASS', 26))
     PADDING_PX = int(os.getenv('PADDING_PX', 10))
     
     # Augmentation config

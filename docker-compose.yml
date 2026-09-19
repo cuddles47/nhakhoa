@@ -26,8 +26,8 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
-      MINIO_BROWSER_REDIRECT_URL: http://100.93.48.110:9001
-      MINIO_SERVER_URL: http://100.93.48.110:9000
+      MINIO_BROWSER_REDIRECT_URL: http://100.85.22.67:9001
+      MINIO_SERVER_URL: http://100.85.22.67:9000
     ports:
       - "9000:9000"     # MinIO API
       - "9001:9001"     # MinIO Console
@@ -49,7 +49,7 @@ services:
       HOST: 0.0.0.0
       PORT: 8001
       DEBUG: ${IMAGE_PROCESSOR_DEBUG:-False}
-      BRACKET_CLASS: ${BRACKET_CLASS:-21}
+      BRACKET_CLASS: ${BRACKET_CLASS:-26}
       PADDING_PX: ${PADDING_PX:-10}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
     ports:
@@ -74,8 +74,8 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
-      DB_HOST: postgres
-      DB_PORT: 5432
+      DB_HOST: ${DB_HOST:-postgres}
+      DB_PORT: ${DB_PORT:-5432}
       DB_USER: ${DB_USER:-postgres}
       DB_PASSWORD: ${DB_PASSWORD:-postgres123}
       DB_NAME: ${DB_NAME:-dental_db}
@@ -108,8 +108,6 @@ services:
       dockerfile: Dockerfile
     ports:
       - "4004:4004"
-    environment:
-      VITE_API_URL: http://192.168.88.69:3000
 
     # depends_on:
     #   - backend
