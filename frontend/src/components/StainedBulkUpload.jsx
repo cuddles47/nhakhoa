@@ -189,6 +189,14 @@ function StainedBulkUpload() {
     validateGroups(groupedArray);
   };
   
+  const formatDateDisplay = (dateStr) => {
+    const d = new Date(dateStr);
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const yyyy = d.getFullYear();
+    return `${dd}/${mm}/${yyyy}`;
+  };
+
   const normalizeIdentifier = (value = '') => {
     if (value === null || value === undefined) return '';
     return String(value)
@@ -294,38 +302,53 @@ function StainedBulkUpload() {
             };
           }
           
-          // Find visit by date
           const visitsResponse = await apiClient.get(`/api/patients/${matchingPatient.id}/visits`);
           const visits = visitsResponse.data.data || [];
           
-          const matchingVisit = visits.find(v => {
+          const visitsWithStatus = await Promise.all(
+            visits.map(async (v) => {
+              try {
+                const statusRes = await apiClient.get(`/api/visits/${v.id}/stained-upload-status`);
+                return { ...v, status: statusRes.data.data };
+              } catch {
+                return { ...v, status: null };
+              }
+            })
+          );
+          
+          const matchingVisit = visitsWithStatus.find(v => {
             const visitDate = new Date(v.visit_date).toISOString().split('T')[0];
             return visitDate === group.visitDate;
           });
           
+          const today = new Date();
+          const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+          
           if (!matchingVisit) {
-            // Visit doesn't exist yet - will be created during upload
             return {
               ...group,
               valid: true,
               patient: matchingPatient,
               visit: null,
+              availableVisits: visitsWithStatus,
+              selectedVisitId: 'new',
+              newVisitDate: todayStr,
               needsVisitCreation: true,
               warning: `Sẽ tạo lần khám mới ngày ${group.visitDateDisplay}`
             };
           }
           
-          // Check if visit has RAW images
-          const statusResponse = await apiClient.get(`/api/visits/${matchingVisit.id}/stained-upload-status`);
-          const status = statusResponse.data.data;
+          const status = matchingVisit.status;
           
-          if (!status.hasRawImages) {
-            // Visit exists but no RAW images yet - warn but still valid
+          if (!status?.hasRawImages) {
             return {
               ...group,
               valid: true,
               patient: matchingPatient,
               visit: matchingVisit,
+              availableVisits: visitsWithStatus,
+              selectedVisitId: matchingVisit.id,
+              newVisitDate: todayStr,
               status,
               warning: 'Lần khám chưa có ảnh RAW'
             };
@@ -336,6 +359,9 @@ function StainedBulkUpload() {
             valid: true,
             patient: matchingPatient,
             visit: matchingVisit,
+            availableVisits: visitsWithStatus,
+            selectedVisitId: matchingVisit.id,
+            newVisitDate: todayStr,
             status
           };
           
@@ -385,6 +411,39 @@ function StainedBulkUpload() {
     handleFiles(e.target.files);
   };
   
+  const handleVisitSelectChange = (groupIndex, value) => {
+    setParsedGroups(prev => {
+      const updated = [...prev];
+      const group = { ...updated[groupIndex] };
+      
+      if (value === 'new') {
+        group.selectedVisitId = 'new';
+        group.visit = null;
+        group.needsVisitCreation = true;
+      } else {
+        const visitId = parseInt(value, 10);
+        const selectedVisit = group.availableVisits?.find(v => v.id === visitId);
+        group.selectedVisitId = visitId;
+        group.visit = selectedVisit || null;
+        group.status = selectedVisit?.status || null;
+        group.needsVisitCreation = false;
+      }
+      
+      updated[groupIndex] = group;
+      return updated;
+    });
+  };
+  
+  const handleNewVisitDateChange = (groupIndex, dateValue) => {
+    setParsedGroups(prev => {
+      const updated = [...prev];
+      const group = { ...updated[groupIndex] };
+      group.newVisitDate = dateValue;
+      updated[groupIndex] = group;
+      return updated;
+    });
+  };
+  
   const handleUpload = async () => {
     if (parsedGroups.length === 0) {
       toast.error('Chưa có file để upload');
@@ -415,12 +474,11 @@ function StainedBulkUpload() {
         try {
           const formData = new FormData();
           
-          // If visit doesn't exist yet, send patientId + visitDate for auto-creation
-          if (group.needsVisitCreation) {
+          if (group.selectedVisitId === 'new') {
             formData.append('patientId', group.patient.id);
-            formData.append('visitDate', group.visitDate);
+            formData.append('visitDate', group.newVisitDate);
           } else {
-            formData.append('visitId', group.visit.id);
+            formData.append('visitId', group.selectedVisitId);
           }
           
           group.images.forEach(img => {
@@ -632,22 +690,64 @@ function StainedBulkUpload() {
                   </div>
                 )}
                 
-                {/* Visit Status */}
-                {group.visit && (
+                {/* Visit Selector */}
+                {group.patient && group.availableVisits && (
+                  <div style={{ marginBottom: '10px' }}>
+                    <label style={{ fontSize: '12px', color: 'var(--text-sub)', fontWeight: '600', display: 'block', marginBottom: '4px' }}>
+                      Chọn lần khám:
+                    </label>
+                    <select
+                      value={group.selectedVisitId}
+                      onChange={(e) => handleVisitSelectChange(idx, e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '8px',
+                        borderRadius: '4px',
+                        border: '1px solid var(--border-color)',
+                        fontSize: '13px',
+                        background: 'var(--bg-main)',
+                        color: 'var(--text-main)',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {group.availableVisits.map(v => (
+                        <option key={v.id} value={v.id}>
+                          Visit #{v.id} - {formatDateDisplay(v.visit_date)} ({v.status?.rawImageCount || 0}/9 RAW, {v.status?.stainedImageCount || 0}/9 Nhuộm)
+                        </option>
+                      ))}
+                      <option value="new">+ Tạo lần khám mới</option>
+                    </select>
+                  </div>
+                )}
+                
+                {/* Selected Visit Info */}
+                {group.visit && group.selectedVisitId !== 'new' && (
                   <div style={{ fontSize: '13px', color: 'var(--text-sub)', marginBottom: '10px' }}>
                     Visit #{group.visit.id} • {group.status?.rawImageCount}/9 RAW • {group.status?.stainedImageCount}/9 Nhuộm
                   </div>
                 )}
                 
-                {/* New Visit Badge */}
-                {group.needsVisitCreation && (
-                  <div className="badge" style={{ 
-                    background: 'var(--info-bg)', 
-                    color: 'var(--info)',
-                    marginBottom: '10px',
-                    display: 'inline-block'
-                  }}>
-                    🆕 Lần khám mới (tạo tự động)
+                {/* New Visit Date Picker */}
+                {group.selectedVisitId === 'new' && (
+                  <div style={{ marginBottom: '10px' }}>
+                    <label style={{ fontSize: '12px', color: 'var(--text-sub)', fontWeight: '600', display: 'block', marginBottom: '4px' }}>
+                      Ngày lần khám mới:
+                    </label>
+                    <input
+                      type="date"
+                      value={group.newVisitDate}
+                      onChange={(e) => handleNewVisitDateChange(idx, e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '8px',
+                        borderRadius: '4px',
+                        border: '1px solid var(--border-color)',
+                        fontSize: '13px',
+                        background: 'var(--bg-main)',
+                        color: 'var(--text-main)',
+                        boxSizing: 'border-box'
+                      }}
+                    />
                   </div>
                 )}
                 
